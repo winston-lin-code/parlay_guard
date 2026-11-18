@@ -210,7 +210,9 @@ def main():
             opts.append(f'<tr data-live-team="{esc(o["team"])}" data-q1="{o["q1"] if pd.notna(o["q1"]) else ""}" data-q2="{o["q2"] if pd.notna(o["q2"]) else ""}"><td>{team_identity(o["team"])}</td><td>${o["price"]:.3f}</td><td>{1/o["price"]:.2f}×</td><td data-live="prob">—</td><td data-live="ask">—</td><td data-live="mult">—</td><td data-live="roi1">—</td><td data-live="roi2">—</td><td>{pct(o["q1"])}</td><td>{pct(o["q2"])}</td><td class="{cls}">{signed(o["roi1"])}</td><td class="{cls}">{signed(o["roi2"])}</td><td>{signed(o["edge1"])}</td><td>{signed(o["edge2"])}</td><td>{esc(o["status"])}</td></tr>')
         pick=lambda p: ('N/A' if pd.isna(p) else f'{team_name(home)} {pct(p)}' if p>=.5 else f'{team_name(away)} {pct(1-p)}')
         label=top['status']; cl='strong' if top['qualifies'] else ('review' if top['rank']<=2 else 'muted')
-        cards.append(f'''<details class="game {cl}" data-away="{esc(away)}" data-home="{esc(home)}" data-date="{esc(forecast_date)}"><summary><span class="match">{team_identity(away)}<span class="versus">@</span>{team_identity(home)}</span><span class="pill {cl}">{esc(label)}</span><span>{esc(top['team'])} @ ${top['price']:.3f}</span><span>v1 {signed(top['roi1'])} · v2 {signed(top['roi2'])}</span></summary><section><div class="stats"><div><small>v1 predicted winner</small><b>{esc(pick(item['p1']))}</b></div><div><small>v2 predicted winner</small><b>{esc(pick(item['p2']))}</b></div><div><small>v1/v2 difference (home)</small><b>{signed(item['p2']-item['p1'])}</b></div></div><p class="live-status">Live Polymarket: waiting for refresh</p><h3>All available wager sides</h3><div class="scroll"><table><thead><tr><th>Wager</th><th>Ask</th><th>Multiplier</th><th>Live implied %</th><th>Live ask</th><th>Live multiplier</th><th>Live v1 ROI</th><th>Live v2 ROI</th><th>v1 win %</th><th>v2 win %</th><th>v1 ROI</th><th>v2 ROI</th><th>v1 edge</th><th>v2 edge</th><th>Screening result</th></tr></thead><tbody>{''.join(opts)}</tbody></table></div><h3>2026–27 season record and previous 10 games</h3><p class="note">Completed regular-season games before {esc(forecast_date)}. Most recent first.</p><div class="teamgrid">{team_record_html(away,season_records.get(away,[]))}{team_record_html(home,season_records.get(home,[]))}</div><h3>Pregame inputs</h3><div class="scroll">{factors(item['a'],item['b'])}</div><p class="note">Inputs are not causal feature attributions. EV assumes a winning YES share pays $1; ROI = probability / best ask − 1. Excludes fees, slippage, execution and settlement risks.</p></section></details>''')
+        cards.append(f'''<details class="game {cl}" data-away="{esc(away)}" data-home="{esc(home)}" data-date="{esc(forecast_date)}" data-home-v1="{item["p1"] if pd.notna(item["p1"]) else ""}" data-home-v2="{item["p2"] if pd.notna(item["p2"]) else ""}"><summary><span class="match">{team_identity(away)}<span class="versus">@</span>{team_identity(home)}</span><span class="pill {cl}">{esc(label)}</span><span>{esc(top['team'])} @ ${top['price']:.3f}</span><span>v1 {signed(top['roi1'])} · v2 {signed(top['roi2'])}</span></summary><section><div class="stats"><div><small>v1 predicted winner</small><b>{esc(pick(item['p1']))}</b></div><div><small>v2 predicted winner</small><b>{esc(pick(item['p2']))}</b></div><div><small>v1/v2 difference (home)</small><b>{signed(item['p2']-item['p1'])}</b></div></div><p class="live-status">Live Polymarket: waiting for refresh</p>
+<div class="reco-area"><div class="reco-head"><h3>Moneyline + Best Player Prop + Combined</h3><button class="reco-refresh" type="button">Update this matchup</button></div><p class="reco-status">Open this matchup to load player props and picks.</p><div class="reco-content"></div></div>
+<h3>All available wager sides</h3><div class="scroll"><table><thead><tr><th>Wager</th><th>Ask</th><th>Multiplier</th><th>Live implied %</th><th>Live ask</th><th>Live multiplier</th><th>Live v1 ROI</th><th>Live v2 ROI</th><th>v1 win %</th><th>v2 win %</th><th>v1 ROI</th><th>v2 ROI</th><th>v1 edge</th><th>v2 edge</th><th>Screening result</th></tr></thead><tbody>{''.join(opts)}</tbody></table></div><h3>2026–27 season record and previous 10 games</h3><p class="note">Completed regular-season games before {esc(forecast_date)}. Most recent first.</p><div class="teamgrid">{team_record_html(away,season_records.get(away,[]))}{team_record_html(home,season_records.get(home,[]))}</div><h3>Pregame inputs</h3><div class="scroll">{factors(item['a'],item['b'])}</div><p class="note">Inputs are not causal feature attributions. EV assumes a winning YES share pays $1; ROI = probability / best ask − 1. Excludes fees, slippage, execution and settlement risks.</p></section></details>''')
     # One eligible wager per matchup. Use the lower model probability, with a
     # 5-percentage-point haircut to reflect unvalidated calibration uncertainty.
     # Only include strictly positive adjusted edge; never force allocation.
@@ -240,6 +242,7 @@ def main():
     style+='''.teamgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.teamrecord{background:#101a2c;border:1px solid #34435b;border-radius:10px;padding:14px;min-width:0}.teamrecord h4{margin:0 0 12px}.recordgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.recordgrid small{display:block;color:#a8b7cc}.recordgrid b{display:block;margin-top:3px}.sequence{font-size:13px}.win{color:#86e7ae;font-weight:700}.loss{color:#f0a4a4;font-weight:700}@media(max-width:850px){.teamgrid{grid-template-columns:1fr}}'''
     style += '.team-identity{display:inline-flex;align-items:center;gap:9px}.team-identity strong{display:block}.team-identity small{display:block;color:#a8b7cc;font-size:11px}.team-logo,.logo-wrap,.logo-fallback{width:42px;height:42px}.team-logo{object-fit:contain}.logo-wrap{display:inline-flex;align-items:center;justify-content:center}.logo-fallback{border-radius:50%;background:#34435b;color:white;align-items:center;justify-content:center;font-size:11px}.match{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.versus{color:#a8b7cc}'
     style += '.live-toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:16px 0}.live-toolbar button{background:#2869ae;border:0;color:white;border-radius:8px;padding:10px;cursor:pointer}.live-status{color:#8fd6ee;font-size:13px}'
+    style += '.reco-area{background:#101a2c;border:1px solid #425571;border-radius:10px;margin:18px 0;padding:14px}.reco-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.reco-head h3{margin:6px 0}.reco-refresh{background:#2869ae;color:white;border:0;border-radius:7px;padding:8px 10px;cursor:pointer}.reco-status{color:#9ab5c9;font-size:13px}.reco-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.reco-block{padding:12px;background:#1a2a43;border:1px solid #3a5276;border-radius:9px;min-width:0}.reco-block h4{margin:0 0 10px}.reco-block .pick{font-size:18px;font-weight:700;color:#a0eac9}.reco-block p{margin:7px 0}.reco-meta{font-size:12px;color:#b7c6dc}.reco-table{overflow-x:auto}.reco-table td{font-size:13px}.reco-no{color:#e5b579}.reco-warning{color:#d4b77b;font-size:12px}@media(max-width:880px){.reco-grid{grid-template-columns:1fr}}'
     style += '.allocator{background:#182338;border:1px solid #40516a;border-radius:14px;padding:20px;margin:22px 0}.allocator-controls{display:flex;gap:18px;flex-wrap:wrap;align-items:end}.allocator label{display:grid;gap:6px;color:#c6d4e8;font-size:13px}.allocator input,.allocator select{background:#0c1220;color:#e8eefb;border:1px solid #62728b;border-radius:7px;padding:10px;font-size:16px;min-width:130px}.allocator .alloc-metrics{display:flex;gap:12px;flex-wrap:wrap;margin:14px 0}.allocator .alloc-metrics>div{background:#101a2c;border-radius:8px;padding:12px;min-width:150px}.allocator .alloc-metrics strong{display:block;font-size:22px;margin-top:4px}.allocator .alloc-note{color:#a8b7cc;font-size:12px;line-height:1.5}.allocator .empty{padding:12px;background:#101a2c;border-radius:8px}#alloc-table td,#alloc-table th{white-space:normal}'
     allocator_html='''<section class="allocator" id="bankroll-allocator">
       <h2>Bankroll Allocator <small style="font-size:12px;color:#a8b7cc">Research simulation</small></h2>
@@ -323,7 +326,99 @@ def main():
     renderAllocation();
     </script>'''.replace('__CANDIDATES__',candidate_json)
     live_script = '<script>\n(function(){\n  const cards = [...document.querySelectorAll(\'details.game[data-away]\')];\n  const status = document.getElementById(\'live-global-status\');\n  async function refreshLive(){\n    if (!cards.length) return;\n    status.textContent = \'Refreshing live Polymarket prices…\';\n    try {\n      const games=cards.map(c=>({away:c.dataset.away,home:c.dataset.home,date:c.dataset.date}));\n      const response=await fetch(\'/api/markets/live\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},body:JSON.stringify({games}),cache:\'no-store\'});\n      if(!response.ok) throw new Error(\'HTTP \'+response.status);\n      const data=await response.json();\n      for(const card of cards){\n        const key=card.dataset.away+\'|\'+card.dataset.home+\'|\'+card.dataset.date;\n        const game=data.games[key];\n        const label=card.querySelector(\'.live-status\');\n        label.textContent=game?.status===\'ok\' ? \'Live market quote · \'+new Date(data.updated_at).toLocaleTimeString() : \'Live market unavailable: \'+(game?.reason||\'No matching market\');\n        for(const row of card.querySelectorAll(\'tr[data-live-team]\')){\n          const quote=game?.sides?.[row.dataset.liveTeam];\n          const cell=name=>row.querySelector(\'[data-live="\'+name+\'"]\');\n          for(const name of [\'prob\',\'ask\',\'mult\',\'roi1\',\'roi2\']) cell(name).textContent=\'—\';\n          if(!quote) continue;\n          if(Number.isFinite(quote.implied_probability)) cell(\'prob\').textContent=(quote.implied_probability*100).toFixed(1)+\'%\';\n          if(Number.isFinite(quote.ask) && quote.ask>0 && quote.ask<1){\n            const ask=quote.ask;\n            cell(\'ask\').textContent=\'$\'+ask.toFixed(3);\n            cell(\'mult\').textContent=(1/ask).toFixed(2)+\'×\';\n            for(const version of [\'1\',\'2\']){\n              const q=Number(row.dataset[\'q\'+version]);\n              if(row.dataset[\'q\'+version]!==\'\' && Number.isFinite(q)) cell(\'roi\'+version).textContent=((q/ask-1)*100).toFixed(1)+\'%\';\n            }\n          }\n        }\n      }\n      status.textContent=\'Live market quotes checked \'+new Date(data.updated_at).toLocaleTimeString()+\' · refreshes every 60 seconds\';\n    } catch(e){\n      status.textContent=\'Live prices unavailable (\'+e.message+\'). Saved values are unchanged.\';\n      for(const card of cards){card.querySelector(\'.live-status\').textContent=\'Live update failed\';\n        for(const cell of card.querySelectorAll(\'[data-live]\')) cell.textContent=\'—\';}\n    }\n  }\n  document.getElementById(\'live-refresh\').addEventListener(\'click\',refreshLive);\n  refreshLive(); setInterval(()=>{if(!document.hidden)refreshLive()},60000);\n})();\n</script>'
-    page=f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Parlay Guard — Value Screen</title><style>{style}</style></head><body><h1>Parlay Guard · v1 vs v2</h1><p>{date} · Saved market-price snapshot · Ranked by agreement and conservative estimated ROI.</p><div class="summary"><div class="metric"><small>Matchups</small><b>{len(items)}</b></div><div class="metric"><small>Both models available</small><b>{matched}</b></div><div class="metric"><small>High model-estimated value screens</small><b>{strong}</b></div></div><p class="warning"><strong>Important:</strong> “High model-estimated value” is a screening label, not a recommendation to bet or proof of positive expected returns. v2 is not independently validated or calibrated. Large estimated edges may reflect model error, stale prices, missing injuries, low liquidity, or data issues. Verify current prices and risk before any decision.</p><p><strong>Screening rules:</strong> both models favor the selected team (win probability ≥50%), each estimates ROI ≥{args.min_roi:.0%}, each estimates probability edge ≥{args.min_edge:.0%}, and their probabilities differ by ≤{args.max_disagreement:.0%}. These thresholds are heuristics, not statistically validated confidence levels.</p><p>Click a matchup to see both sides, both model estimates, and pregame factors.</p><div class="live-toolbar"><button id="live-refresh" type="button">Refresh live Polymarket prices</button><span id="live-global-status">Waiting for first update</span></div>{allocator_html}{''.join(cards)}{allocator_js}{live_script}<p class="note">Saved screening and allocator values remain historical snapshots; separate live columns show refreshed quotes when available. For research and model evaluation only.</p></body></html>'''
+
+    recommendations_script = r'''<script>
+(function(){
+  const cards=[...document.querySelectorAll('details.game[data-away]')];
+  const fmtPct=x=>typeof x==='number' && Number.isFinite(x)?(100*x).toFixed(1)+'%':'Unavailable';
+  const fmtAsk=x=>typeof x==='number' && Number.isFinite(x)?'$'+x.toFixed(3):'Unavailable';
+  const text=(tag,value,cls)=>{const el=document.createElement(tag);el.textContent=String(value);if(cls)el.className=cls;return el};
+  const panel=(title)=>{const el=document.createElement('div');el.className='reco-block';el.append(text('h4',title));return el};
+  const p=(box,label,value)=>{const para=text('p',label+': '+value,'reco-meta');box.append(para)};
+  function display(card,data){
+    const content=card.querySelector('.reco-content');content.replaceChildren();
+    const grid=document.createElement('div');grid.className='reco-grid';
+    const ml=panel('Best Moneyline');
+    if(data.best_moneyline){
+      const m=data.best_moneyline;
+      ml.append(text('div',m.team+' to win','pick'));
+      p(ml,'Best ask',fmtAsk(m.ask));p(ml,'v1 / v2 probability',fmtPct(m.model_v1)+' / '+fmtPct(m.model_v2));
+      p(ml,'Model-estimated ROI',fmtPct(m.estimated_roi));
+    }else{
+      ml.append(text('div','No qualifying moneyline','reco-no'));
+      p(ml,'Most likely winner',data.moneyline?.predicted_winner||'Unknown');
+      p(ml,'Reason',data.moneyline?.reason||'Unavailable');
+    }
+    grid.append(ml);
+    const prop=panel('Top Player Points Prop');
+    if(data.best_prop){
+      const x=data.best_prop;
+      prop.append(text('div',x.player+' — '+x.selection+' '+x.line+' points','pick'));
+      p(prop,'Best ask',fmtAsk(x.ask));p(prop,'Model probability',fmtPct(x.estimated_probability));
+      p(prop,'Model-estimated ROI',fmtPct(x.estimated_roi));
+      p(prop,'Spread / ask depth',fmtAsk(x.spread)+' / $'+x.ask_depth_usd.toFixed(2));
+      p(prop,'Past games used',x.samples);
+    }else{
+      prop.append(text('div','No qualifying player prop','reco-no'));
+      p(prop,'Reason','No market passed data, liquidity, spread and model filters');
+    }
+    grid.append(prop);
+    const combo=panel('Combined Moneyline + Prop');
+    if(data.combined?.estimated_joint_probability!=null){
+      const c=data.combined;
+      combo.append(text('div',c.moneyline_team+' win + '+c.player+' '+c.selection+' '+c.line,'pick'));
+      p(combo,'Exploratory joint chance',fmtPct(c.estimated_joint_probability));
+      p(combo,'Model break-even price',fmtAsk(c.maximum_break_even_combined_price));
+    }else combo.append(text('div','Joint estimate unavailable','reco-no'));
+    p(combo,'Actual Combo price','Not available / not verified');
+    p(combo,'Combined EV & payout','Not calculable without a genuine Combo quote');
+    grid.append(combo);
+    content.append(grid);
+    if(data.other_props?.length){
+      content.append(text('h4','Other player prop opportunities'));
+      const scroll=document.createElement('div');scroll.className='reco-table';
+      const table=document.createElement('table'),head=document.createElement('thead');
+      const tr=document.createElement('tr');
+      ['Player','Prop','Ask','Model chance','Est. ROI','Spread','Research status'].forEach(v=>tr.append(text('th',v)));
+      head.append(tr);table.append(head);
+      const body=document.createElement('tbody');
+      for(const x of data.other_props){
+        const row=document.createElement('tr');
+        [x.player,x.selection+' '+x.line+' PTS',fmtAsk(x.ask),fmtPct(x.estimated_probability),fmtPct(x.estimated_roi),fmtAsk(x.spread),x.qualifies?'Eligible':'Review only'].forEach(v=>row.append(text('td',v)));
+        body.append(row);
+      }
+      table.append(body);scroll.append(table);content.append(scroll);
+    }
+    content.append(text('p','Player prop model: historical hit frequencies (not yet calibrated); past outcomes and current prices do not guarantee an edge. Combo price unavailable until a supported executable quote is integrated.','reco-warning'));
+    if(data.notes?.length)content.append(text('p',data.notes.join(' · '),'reco-warning'));
+  }
+  async function load(card,force=false){
+    if(card.dataset.loading==='true')return;
+    if(!force && card.dataset.loaded==='true')return;
+    const status=card.querySelector('.reco-status');
+    const v1=Number(card.dataset.homeV1),v2=Number(card.dataset.homeV2);
+    if(card.dataset.homeV1===''||card.dataset.homeV2===''||!Number.isFinite(v1)||!Number.isFinite(v2)){
+      status.textContent='Both model probabilities are required for this matchup.';return;
+    }
+    card.dataset.loading='true';status.textContent='Loading live moneyline, player points markets and historical model…';
+    try {
+      const request={away:card.dataset.away,home:card.dataset.home,date:card.dataset.date,home_v1:v1,home_v2:v2};
+      const r=await fetch('/api/recommendations',{method:'POST',headers:{'Content-Type':'application/json'},cache:'no-store',body:JSON.stringify(request)});
+      if(!r.ok)throw Error('HTTP '+r.status);
+      const data=await r.json();display(card,data);
+      status.textContent='Checked '+new Date(data.updated_at).toLocaleTimeString()+' · '+(data.status==='ok'?'Analysis available':'Partial data available');
+      card.dataset.loaded='true';
+    }catch(err){status.textContent='Recommendations unavailable: '+err.message;}
+    finally{card.dataset.loading='false';}
+  }
+  for(const card of cards){
+    card.addEventListener('toggle',()=>{if(card.open)load(card)});
+    card.querySelector('.reco-refresh')?.addEventListener('click',()=>load(card,true));
+    if(card.open)load(card);
+  }
+})();
+</script>'''
+    page=f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Parlay Guard — Value Screen</title><style>{style}</style></head><body><h1>Parlay Guard · v1 vs v2</h1><p>{date} · Saved market-price snapshot · Ranked by agreement and conservative estimated ROI.</p><div class="summary"><div class="metric"><small>Matchups</small><b>{len(items)}</b></div><div class="metric"><small>Both models available</small><b>{matched}</b></div><div class="metric"><small>High model-estimated value screens</small><b>{strong}</b></div></div><p class="warning"><strong>Important:</strong> “High model-estimated value” is a screening label, not a recommendation to bet or proof of positive expected returns. v2 is not independently validated or calibrated. Large estimated edges may reflect model error, stale prices, missing injuries, low liquidity, or data issues. Verify current prices and risk before any decision.</p><p><strong>Screening rules:</strong> both models favor the selected team (win probability ≥50%), each estimates ROI ≥{args.min_roi:.0%}, each estimates probability edge ≥{args.min_edge:.0%}, and their probabilities differ by ≤{args.max_disagreement:.0%}. These thresholds are heuristics, not statistically validated confidence levels.</p><p>Click a matchup to see both sides, both model estimates, and pregame factors.</p><div class="live-toolbar"><button id="live-refresh" type="button">Refresh live Polymarket prices</button><span id="live-global-status">Waiting for first update</span></div>{allocator_html}{''.join(cards)}{allocator_js}{live_script}{recommendations_script}<p class="note">Saved screening and allocator values remain historical snapshots; separate live columns show refreshed quotes when available. For research and model evaluation only.</p></body></html>'''
     args.output.parent.mkdir(parents=True,exist_ok=True)
     args.output.write_text(page,encoding='utf-8')
     print(f'Saved {args.output.resolve()} | {strong} high-value screens | {matched}/{len(items)} matchups matched')

@@ -1,0 +1,197 @@
+{
+  "features": [
+    "IS_HOME",
+    "REST_DAYS",
+    "GAMES_PLAYED_BEFORE",
+    "CURRENT_SEASON_GAMES_PLAYED",
+    "AST_LAST_10",
+    "AST_LAST_20",
+    "AST_LAST_5",
+    "AST_STD_10",
+    "AST_STD_20",
+    "AST_STD_5",
+    "AST_TREND_5_20",
+    "BLK_LAST_10",
+    "BLK_LAST_20",
+    "BLK_LAST_5",
+    "BLK_STD_10",
+    "BLK_STD_20",
+    "BLK_STD_5",
+    "FG3A_LAST_10",
+    "FG3A_LAST_20",
+    "FG3A_LAST_5",
+    "FG3A_STD_10",
+    "FG3A_STD_20",
+    "FG3A_STD_5",
+    "FG3A_TREND_5_20",
+    "FG3M_LAST_10",
+    "FG3M_LAST_20",
+    "FG3M_LAST_5",
+    "FG3M_STD_10",
+    "FG3M_STD_20",
+    "FG3M_STD_5",
+    "FGA_LAST_10",
+    "FGA_LAST_20",
+    "FGA_LAST_5",
+    "FGA_SEASON_AVG",
+    "FGA_STD_10",
+    "FGA_STD_20",
+    "FGA_STD_5",
+    "FGA_TREND_5_20",
+    "FTA_LAST_10",
+    "FTA_LAST_20",
+    "FTA_LAST_5",
+    "FTA_STD_10",
+    "FTA_STD_20",
+    "FTA_STD_5",
+    "MIN_LAST_10",
+    "MIN_LAST_20",
+    "MIN_LAST_5",
+    "MIN_SEASON_AVG",
+    "MIN_STD_10",
+    "MIN_STD_20",
+    "MIN_STD_5",
+    "MIN_TREND_5_20",
+    "PTS_LAST_10",
+    "PTS_LAST_20",
+    "PTS_LAST_5",
+    "PTS_SEASON_AVG",
+    "PTS_STD_10",
+    "PTS_STD_20",
+    "PTS_STD_5",
+    "PTS_TREND_5_20",
+    "REB_LAST_10",
+    "REB_LAST_20",
+    "REB_LAST_5",
+    "REB_STD_10",
+    "REB_STD_20",
+    "REB_STD_5",
+    "STL_LAST_10",
+    "STL_LAST_20",
+    "STL_LAST_5",
+    "STL_STD_10",
+    "STL_STD_20",
+    "STL_STD_5",
+    "TOV_LAST_10",
+    "TOV_LAST_20",
+    "TOV_LAST_5",
+    "TOV_STD_10",
+    "TOV_STD_20",
+    "TOV_STD_5"
+  ],
+  "train_end_exclusive": "2025-10-01",
+  "test_start": "2026-10-01",
+  "train_rows": 88956,
+  "validation_rows": 24828,
+  "test_rows": 4183,
+  "results": {
+    "PTS": {
+      "v2": {
+        "mae": 4.6408,
+        "rmse": 6.0265,
+        "bias": 0.2008
+      },
+      "v1": {
+        "mae": 4.8742,
+        "rmse": 6.217,
+        "bias": 0.8443
+      },
+      "baseline": {
+        "mae": 4.9782,
+        "rmse": 6.3592,
+        "bias": 0.8513
+      },
+      "best_iteration": 626
+    },
+    "REB": {
+      "v2": {
+        "mae": 1.8889,
+        "rmse": 2.4657,
+        "bias": 0.0437
+      },
+      "v1": {
+        "mae": 1.9419,
+        "rmse": 2.5151,
+        "bias": 0.16
+      },
+      "baseline": {
+        "mae": 1.9916,
+        "rmse": 2.6087,
+        "bias": 0.2084
+      },
+      "best_iteration": 446
+    },
+    "AST": {
+      "v2": {
+        "mae": 1.3545,
+        "rmse": 1.8294,
+        "bias": 0.0159
+      },
+      "v1": {
+        "mae": 1.398,
+        "rmse": 1.8609,
+        "bias": 0.174
+      },
+      "baseline": {
+        "mae": 1.429,
+        "rmse": 1.9177,
+        "bias": 0.1542
+      },
+      "best_iteration": 465
+    },
+    "FG3M": {
+      "v2": {
+        "mae": 0.9168,
+        "rmse": 1.2422,
+        "bias": 0.0357
+      },
+      "v1": {
+        "mae": 0.9335,
+        "rmse": 1.2532,
+        "bias": 0.0826
+      },
+      "baseline": {
+        "mae": 0.9407,
+        "rmse": 1.2873,
+        "bias": 0.0536
+      },
+      "best_iteration": 422
+    },
+    "STL": {
+      "v2": {
+        "mae": 0.7125,
+        "rmse": 0.9274,
+        "bias": 0.0104
+      },
+      "v1": {
+        "mae": 0.7144,
+        "rmse": 0.9265,
+        "bias": 0.0147
+      },
+      "baseline": {
+        "mae": 0.7347,
+        "rmse": 0.9639,
+        "bias": 0.0399
+      },
+      "best_iteration": 444
+    },
+    "BLK": {
+      "v2": {
+        "mae": 0.5339,
+        "rmse": 0.7337,
+        "bias": 0.0022
+      },
+      "v1": {
+        "mae": 0.5356,
+        "rmse": 0.7349,
+        "bias": 0.0036
+      },
+      "baseline": {
+        "mae": 0.5335,
+        "rmse": 0.7565,
+        "bias": 0.0173
+      },
+      "best_iteration": 223
+    }
+  }
+}

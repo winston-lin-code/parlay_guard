@@ -1,0 +1,119 @@
+{
+  "features": [
+    "IS_HOME",
+    "REST_DAYS",
+    "GAMES_PLAYED_BEFORE",
+    "AST_LAST_10",
+    "AST_LAST_20",
+    "AST_LAST_5",
+    "BLK_LAST_10",
+    "BLK_LAST_20",
+    "BLK_LAST_5",
+    "FG3A_LAST_10",
+    "FG3A_LAST_20",
+    "FG3A_LAST_5",
+    "FG3M_LAST_10",
+    "FG3M_LAST_20",
+    "FG3M_LAST_5",
+    "FGA_LAST_10",
+    "FGA_LAST_20",
+    "FGA_LAST_5",
+    "FTA_LAST_10",
+    "FTA_LAST_20",
+    "FTA_LAST_5",
+    "MIN_LAST_10",
+    "MIN_LAST_20",
+    "MIN_LAST_5",
+    "PTS_LAST_10",
+    "PTS_LAST_20",
+    "PTS_LAST_5",
+    "REB_LAST_10",
+    "REB_LAST_20",
+    "REB_LAST_5",
+    "STL_LAST_10",
+    "STL_LAST_20",
+    "STL_LAST_5",
+    "TOV_LAST_10",
+    "TOV_LAST_20",
+    "TOV_LAST_5"
+  ],
+  "train_end_exclusive": "2025-10-01",
+  "test_start": "2026-10-01",
+  "train_rows": 88956,
+  "validation_rows": 24828,
+  "test_rows": 4183,
+  "results": {
+    "PTS": {
+      "catboost": {
+        "mae": 4.8742,
+        "rmse": 6.217
+      },
+      "baseline": {
+        "mae": 4.9782,
+        "rmse": 6.3592
+      },
+      "mae_improvement": 0.104,
+      "best_iteration": 407
+    },
+    "REB": {
+      "catboost": {
+        "mae": 1.9419,
+        "rmse": 2.5151
+      },
+      "baseline": {
+        "mae": 1.9916,
+        "rmse": 2.6087
+      },
+      "mae_improvement": 0.0497,
+      "best_iteration": 454
+    },
+    "AST": {
+      "catboost": {
+        "mae": 1.398,
+        "rmse": 1.8609
+      },
+      "baseline": {
+        "mae": 1.429,
+        "rmse": 1.9177
+      },
+      "mae_improvement": 0.031,
+      "best_iteration": 455
+    },
+    "FG3M": {
+      "catboost": {
+        "mae": 0.9335,
+        "rmse": 1.2532
+      },
+      "baseline": {
+        "mae": 0.9407,
+        "rmse": 1.2873
+      },
+      "mae_improvement": 0.0072,
+      "best_iteration": 257
+    },
+    "STL": {
+      "catboost": {
+        "mae": 0.7144,
+        "rmse": 0.9265
+      },
+      "baseline": {
+        "mae": 0.7347,
+        "rmse": 0.9639
+      },
+      "mae_improvement": 0.0203,
+      "best_iteration": 330
+    },
+    "BLK": {
+      "catboost": {
+        "mae": 0.5356,
+        "rmse": 0.7349
+      },
+      "baseline": {
+        "mae": 0.5335,
+        "rmse": 0.7565
+      },
+      "mae_improvement": -0.0021,
+      "best_iteration": 168
+    }
+  }
+}
