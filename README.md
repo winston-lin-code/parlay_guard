@@ -1,0 +1,99 @@
+# Parlay Guard — NBA probability research MVP
+
+An end-to-end Python portfolio project that converts NBA historical game logs into **pregame** features, trains and evaluates a baseline NBA winner model, and compares estimated probabilities with **manually entered** prediction-market prices. It does **not** place trades or guarantee an edge.
+
+## Project layout
+
+```text
+parlay_guard/
+├── data/                       # Local CSVs (gitignored)
+├── models/                     # Saved model and evaluation (model ignored)
+├── src/
+│   ├── collect.py              # Optional NBA API collection
+│   ├── clean.py                # Home/away and outcome validation
+│   ├── merge_games.py          # One row per NBA game
+│   ├── feature_engineering.py  # Historical rolling form and rest
+│   ├── merge_features.py      # Home/away model features
+│   ├── train.py               # Chronological evaluation and calibration
+│   ├── scan.py                # Manual-price research scanner
+│   └── pipeline.py            # Runs offline stages
+├── tests/test_features.py
+├── requirements.txt
+└── README.md
+```
+
+## Windows PowerShell setup
+
+```powershell
+cd C:\Users\Winston\projects\polyPredict
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+If you extract this ZIP into a `parlay_guard` subfolder, run commands **inside that folder** instead; or copy the ZIP contents directly into your existing `polyPredict` project.
+
+### Existing historical CSV
+
+Place your existing `nba_all_seasons.csv` in `data/` (9,840 team-game rows from your previous work). Then:
+
+```powershell
+python -m src.pipeline
+pytest -q
+```
+
+The pipeline produces:
+
+- `data/nba_games_updated.csv`
+- `data/nba_games_merged.csv`
+- `data/nba_team_features.csv`
+- `data/nba_model_dataset.csv`
+- `models/nba_home_win.joblib`
+- `models/evaluation.json`
+
+Alternatively, if you already have cleaned/merged CSVs, you can run individual modules:
+
+```powershell
+python -m src.feature_engineering
+python -m src.merge_features
+python -m src.train
+```
+
+### Optional: fetch NBA game logs
+
+```powershell
+python -m src.collect --seasons 2022-23 2023-24 2024-25 2025-26
+```
+
+This replaces `data/nba_all_seasons.csv`. NBA Stats may rate-limit requests; using your existing dataset is preferable. The current 2025–26 season might not match the exact snapshot you collected previously.
+
+## Manual market-price comparison
+
+Example **illustrative** quote; NOT a current Polymarket market:
+
+```powershell
+python -m src.scan --home BOS --away NYK --date 2026-11-20 --home-price 0.55 --away-price 0.47
+```
+
+Prices are fractions of $1 (`0.55` means 55¢). The scanner outputs model probabilities, probability differences, and `NO BET` or `PAPER-REVIEW`. It intentionally does not interpret raw differences as guaranteed profit, and it does not trade. Prices for opposite outcomes can differ from 1 minus the other quote due to spreads, fees, and market structure.
+
+**Important:** This scanner uses the historical snapshot on disk. It does not fetch fresh NBA games, injuries, lineups, live markets, or market-specific settlement rules. For dates after the snapshot, recent form becomes stale. Always verify data freshness before considering even a paper-trade comparison.
+
+## Modeling decisions and limitations
+
+- Each game's feature values are calculated from **previous** team games (`shift(1)`), not the game's own result.
+- 5- and 10-game win rates and days of rest are the initial features. Rolling features carry across seasons, which may be undesirable after major roster changes.
+- Missing values for the first 5/10 team games are expected; the training pipeline imputes them using training-set medians and missingness indicators.
+- Chronological train/validation/test split prevents training on later games to predict earlier games. The validation period fits a Platt calibrator; the final test period remains unseen during fitting.
+- The **baseline** is deliberately simple and may be weak or miscalibrated; check test Brier score and log loss before interpreting any price differences.
+- There is no live Polymarket API integration or order execution. `PAPER-REVIEW` means *inspect further*, not a recommendation to wager.
+- Before production: add actual scheduled games, lineups/injuries with timestamped availability, more seasons, closing odds, vig/fees/slippage, market liquidity, walk-forward backtests, and monitored data updates.
+- Joblib/pickle model files should only be loaded from trusted sources.
+
+## Suggested next engineering improvements
+
+1. Add team offensive/defensive efficiency and strength of schedule using strictly pregame rolling values.
+2. Add timestamped injury/lineup data and enforce feature availability at prediction time.
+3. Add automated market-data ingestion with market-ID mapping and price timestamps.
+4. Add walk-forward evaluation and paper-trading logs including fees and slippage.
+5. Expose predictions through a FastAPI backend and a simple frontend.

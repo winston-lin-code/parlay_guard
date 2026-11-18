@@ -1,0 +1,22 @@
+{
+  "split_dates": {
+    "train_before": "2025-03-12",
+    "test_from": "2025-12-29"
+  },
+  "train_games": 3432,
+  "validation": {
+    "n_games": 730,
+    "accuracy": 0.6082191780821918,
+    "brier": 0.23571229337540775,
+    "log_loss": 0.6672234680141906,
+    "roc_auc": 0.6409456923170067
+  },
+  "test": {
+    "n_games": 758,
+    "accuracy": 0.5949868073878628,
+    "brier": 0.2365860055472232,
+    "log_loss": 0.6656042074812734,
+    "roc_auc": 0.6210481825866441
+  },
+  "calibration": "Platt on validation predictions"
+}

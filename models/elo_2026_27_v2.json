@@ -1,0 +1,17 @@
+{
+  "inputs": [
+    "HOME_WIN_PCT_LAST_5",
+    "HOME_WIN_PCT_LAST_10",
+    "HOME_DAYS_REST",
+    "HOME_POINT_DIFF_LAST_10",
+    "AWAY_WIN_PCT_LAST_5",
+    "AWAY_WIN_PCT_LAST_10",
+    "AWAY_DAYS_REST",
+    "AWAY_POINT_DIFF_LAST_10",
+    "ELO_DIFF"
+  ],
+  "last_historical_date": "2026-11-17",
+  "training_cutoff_exclusive": "2026-11-18",
+  "training_games": 5130,
+  "model_version": "2026_27_v2"
+}

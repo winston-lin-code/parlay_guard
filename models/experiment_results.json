@@ -1,0 +1,83 @@
+{
+  "split_dates": {
+    "train_before": "2025-03-12",
+    "test_from": "2025-12-29"
+  },
+  "train_games": 3432,
+  "validation_games": 730,
+  "held_out_test_games": 758,
+  "best_trained_model": "gb_no_team_identity",
+  "best_validation_log_loss": 0.6361080580781985,
+  "ranking": [
+    {
+      "model": "gb_no_team_identity",
+      "accuracy": 0.6383561643835617,
+      "brier": 0.2226645498417919,
+      "log_loss": 0.6361080580781985,
+      "roc_auc": 0.6908488224253799
+    },
+    {
+      "model": "gb_no_last_5_or_team",
+      "accuracy": 0.6328767123287671,
+      "brier": 0.2227030435551577,
+      "log_loss": 0.6362298330773308,
+      "roc_auc": 0.6904628564509294
+    },
+    {
+      "model": "gb_no_last_5",
+      "accuracy": 0.6438356164383562,
+      "brier": 0.2256731161189064,
+      "log_loss": 0.6430546047382527,
+      "roc_auc": 0.6845371435490706
+    },
+    {
+      "model": "gradient_boosting",
+      "accuracy": 0.6383561643835617,
+      "brier": 0.22578246385387968,
+      "log_loss": 0.6432124083202149,
+      "roc_auc": 0.6828192165647515
+    },
+    {
+      "model": "hist_gradient_boosting",
+      "accuracy": 0.6301369863013698,
+      "brier": 0.22633413397178137,
+      "log_loss": 0.6447183590643293,
+      "roc_auc": 0.6735636011382212
+    },
+    {
+      "model": "random_forest",
+      "accuracy": 0.6424657534246575,
+      "brier": 0.22734124227009248,
+      "log_loss": 0.6465849686252133,
+      "roc_auc": 0.6882984198098928
+    },
+    {
+      "model": "logistic_C_0.1",
+      "accuracy": 0.6287671232876713,
+      "brier": 0.22711152960636424,
+      "log_loss": 0.6467428522191614,
+      "roc_auc": 0.6685990191923472
+    },
+    {
+      "model": "logistic_C_1",
+      "accuracy": 0.6082191780821918,
+      "brier": 0.23571229337540814,
+      "log_loss": 0.6672234680141917,
+      "roc_auc": 0.6409456923170067
+    },
+    {
+      "model": "logistic_C_10",
+      "accuracy": 0.6054794520547945,
+      "brier": 0.23750023647770124,
+      "log_loss": 0.6716623063081489,
+      "roc_auc": 0.6364578918689834
+    },
+    {
+      "model": "train_rate_baseline",
+      "accuracy": 0.5452054794520548,
+      "brier": 0.24811974711300555,
+      "log_loss": 0.6893849154210285,
+      "roc_auc": 0.5
+    }
+  ]
+}

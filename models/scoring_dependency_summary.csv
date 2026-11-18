@@ -1,0 +1,5 @@
+dependency,star_performance,games,wins,win_rate,mean_star_share
+High,At least 80% of pregame average,2978,1784,0.5990597716588314,0.22817563555384338
+High,Below 80% of pregame average,1185,531,0.4481012658227848,0.23071484976492643
+Low,At least 80% of pregame average,3088,1539,0.49838082901554404,0.17036341294335142
+Low,Below 80% of pregame average,1075,414,0.3851162790697674,0.17147010680259794

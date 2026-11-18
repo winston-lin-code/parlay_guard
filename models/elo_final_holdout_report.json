@@ -1,0 +1,158 @@
+{
+  "experiment": "One-time final holdout, selected Elo gradient boosting, raw probabilities",
+  "train_end_exclusive": "2025-12-29",
+  "test_start_inclusive": "2025-12-29",
+  "test_end_inclusive": "2026-04-12",
+  "games_total": 4920,
+  "train_games": 4162,
+  "test_games": 758,
+  "train_home_win_rate": 0.5557424315233062,
+  "test_home_win_rate": 0.554089709762533,
+  "data_file_sha256": "28fa6b0e682d1c9be70226ec5e7b49d19ab8500c3e8950020fb0d7d222a2c0f4",
+  "selected_model": {
+    "feature_columns": [
+      "HOME_WIN_PCT_LAST_5",
+      "HOME_WIN_PCT_LAST_10",
+      "HOME_DAYS_REST",
+      "HOME_POINT_DIFF_LAST_10",
+      "AWAY_WIN_PCT_LAST_5",
+      "AWAY_WIN_PCT_LAST_10",
+      "AWAY_DAYS_REST",
+      "AWAY_POINT_DIFF_LAST_10",
+      "ELO_DIFF"
+    ],
+    "model_params": {
+      "ccp_alpha": 0.0,
+      "criterion": "deprecated",
+      "init": null,
+      "learning_rate": 0.05,
+      "loss": "log_loss",
+      "max_depth": 2,
+      "max_features": null,
+      "max_leaf_nodes": null,
+      "min_impurity_decrease": 0.0,
+      "min_samples_leaf": 1,
+      "min_samples_split": 2,
+      "min_weight_fraction_leaf": 0.0,
+      "n_estimators": 100,
+      "n_iter_no_change": null,
+      "random_state": 42,
+      "subsample": 1.0,
+      "tol": 0.0001,
+      "validation_fraction": 0.1,
+      "verbose": 0,
+      "warm_start": false
+    },
+    "calibration": "none; raw"
+  },
+  "summary": [
+    {
+      "model": "elo_formula",
+      "games": 758,
+      "accuracy": 0.7137203166226913,
+      "brier": 0.19860640664198476,
+      "log_loss": 0.584005184494478,
+      "roc_auc": 0.7619047619047619,
+      "ece_10_bins": 0.053773647479861644
+    },
+    {
+      "model": "selected_elo_gb",
+      "games": 758,
+      "accuracy": 0.6939313984168866,
+      "brier": 0.20050192635946418,
+      "log_loss": 0.5870723120668339,
+      "roc_auc": 0.7551563820794589,
+      "ece_10_bins": 0.04071003430568708
+    },
+    {
+      "model": "historical_home_rate",
+      "games": 758,
+      "accuracy": 0.554089709762533,
+      "brier": 0.24707703478702342,
+      "log_loss": 0.6872898508242227,
+      "roc_auc": 0.5,
+      "ece_10_bins": 0.0016527217607732458
+    }
+  ],
+  "approx_bootstrap_95pct_intervals": {
+    "historical_home_rate": {
+      "log_loss_95pct_approx": [
+        0.67960988881637,
+        0.6949698128320749
+      ],
+      "brier_95pct_approx": [
+        0.24325301573793115,
+        0.25090105383611566
+      ],
+      "accuracy_95pct_approx": [
+        0.5197889182058048,
+        0.5883905013192612
+      ]
+    },
+    "elo_formula": {
+      "log_loss_95pct_approx": [
+        0.5562583407643604,
+        0.6114460766539018
+      ],
+      "brier_95pct_approx": [
+        0.1866094320506156,
+        0.21071610871228755
+      ],
+      "accuracy_95pct_approx": [
+        0.6807387862796834,
+        0.7467018469656992
+      ]
+    },
+    "selected_elo_gb": {
+      "log_loss_95pct_approx": [
+        0.56293260536801,
+        0.6110525050513319
+      ],
+      "brier_95pct_approx": [
+        0.1896803684232464,
+        0.2113320144438424
+      ],
+      "accuracy_95pct_approx": [
+        0.6622361477572559,
+        0.7269129287598944
+      ]
+    }
+  },
+  "paired_log_loss_comparisons": {
+    "historical_home_rate": {
+      "mean_log_loss_delta": -0.10021753875738879,
+      "approx_95pct_interval": [
+        -0.12309000579970875,
+        -0.07682616584499495
+      ]
+    },
+    "elo_formula": {
+      "mean_log_loss_delta": 0.0030671275723557745,
+      "approx_95pct_interval": [
+        -0.006915200142678672,
+        0.01249378387275111
+      ]
+    }
+  },
+  "confusion_matrix_away_home": [
+    [
+      191,
+      147
+    ],
+    [
+      85,
+      335
+    ]
+  ],
+  "package_versions": {
+    "numpy": "2.2.4",
+    "pandas": "2.3.3",
+    "scikit_learn": "1.9.1"
+  },
+  "notes": [
+    "Selected from pre-holdout walk-forward validation; no further tuning on this test.",
+    "Historical held-out games are evaluated sequentially using pregame features. Pregame Elo and rolling stats for a later test game may use earlier test-game results, but the classifier is fitted ONLY on pre-2025-12-29 examples.",
+    "10-bin ECE depends on bin choices and may be noisy with 758 games.",
+    "Bootstrap uncertainty treats games as independent; approximate only."
+  ]
+}
