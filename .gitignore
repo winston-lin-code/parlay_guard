@@ -1,52 +1,23 @@
-.venv/
-__pycache__/
-.pytest_cache/
-*.pyc
-models/*.joblib
-data/*.csv
-!data/.gitkeep
+# Generated datasets
+*.parquet
+*.csv
+*.feather
+*.arrow
+
+# Downloaded NBA data
+data/nba/play_by_play/
+data/polymarket/data/
+
+# Generated outputs
+data/processed/
+data/paper_trades/
+
 # Python
 __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Secrets
 .env
 .env.*
-data/
-*.parquet
-data/nba/play_by_play/
-data/polymarket/data/
-
-# Generated artifacts
-data/processed/
-data/paper_trades/
-*.pkl
-*.joblib
-*.h5
-
-# IDE
-.vscode/
-.idea/
-
-# Windows
-Thumbs.db
-Desktop.ini
-
-# Temporary files
-*.log
-.pytest_cache/
-
-# Local databases
-*.db
-*.sqlite
-*.sqlite3
-
-# Generated reports
-models/live_predictions_*.csv
-models/polymarket_ev_*.csv
-models/parlay_guard_*.html
-models/*.joblib
-models/live_predictions_*.csv
-# Secrets
-secrets.json
-credentials.jsongit remote
