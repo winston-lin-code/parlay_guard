@@ -1,0 +1,35 @@
+ catboost_info/catboost_training.json         |    704 [32m+[m
+ catboost_info/learn/events.out.tfevents      |    Bin [31m0[m -> [32m34170[m bytes
+ catboost_info/learn_error.tsv                |    701 [32m+[m
+ catboost_info/test/events.out.tfevents       |    Bin [31m0[m -> [32m14766[m bytes
+ catboost_info/test_error.tsv                 |    305 [32m+[m
+ catboost_info/time_left.tsv                  |    701 [32m+[m
+ data/processed/player_training_data.csv      | 117968 [32m++++[m
+ models/parlay_guard_v1_vs_v2.html            |    172 [32m+[m[31m-[m
+ models/player_stats/ast_model.cbm            |    Bin [31m0[m -> [32m534984[m bytes
+ models/player_stats/blk_model.cbm            |    Bin [31m0[m -> [32m207184[m bytes
+ models/player_stats/fg3m_model.cbm           |    Bin [31m0[m -> [32m309368[m bytes
+ models/player_stats/pts_model.cbm            |    Bin [31m0[m -> [32m481600[m bytes
+ models/player_stats/reb_model.cbm            |    Bin [31m0[m -> [32m535392[m bytes
+ models/player_stats/stl_model.cbm            |    Bin [31m0[m -> [32m390048[m bytes
+ models/player_stats/training_results.json    |    119 [32m+[m
+ models/player_stats_v2/ast_model.cbm         |    Bin [31m0[m -> [32m550072[m bytes
+ models/player_stats_v2/blk_model.cbm         |    Bin [31m0[m -> [32m273032[m bytes
+ models/player_stats_v2/calibration.json      | 885836 [32m++++++++++++++++++++++++[m
+ models/player_stats_v2/fg3m_model.cbm        |    Bin [31m0[m -> [32m499384[m bytes
+ models/player_stats_v2/pts_model.cbm         |    Bin [31m0[m -> [32m735704[m bytes
+ models/player_stats_v2/reb_model.cbm         |    Bin [31m0[m -> [32m529664[m bytes
+ models/player_stats_v2/stl_model.cbm         |    Bin [31m0[m -> [32m526624[m bytes
+ models/player_stats_v2/training_results.json |    197 [32m+[m
+ src/api.py                                   |     35 [32m+[m[31m-[m
+ src/collect_prop_history.py                  |    128 [32m+[m
+ src/parlay_guard_dual_report_value.py        |     99 [32m+[m[31m-[m
+ src/player_models/__init__.py                |      0
+ src/player_models/calibrate.py               |    406 [32m+[m
+ src/player_models/features.py                |    162 [32m+[m
+ src/player_models/predict.py                 |    512 [32m+[m
+ src/player_models/train.py                   |    150 [32m+[m
+ src/player_models/train_v2.py                |    172 [32m+[m
+ src/player_prop_recommendations.py           |    373 [32m+[m
+ tests/test_player_prop_recommendations.py    |    100 [32m+[m
+ 34 files changed, 1008827 insertions(+), 13 deletions(-)

@@ -14,7 +14,15 @@ venv/
 .env.*
 data/
 *.parquet
+data/nba/play_by_play/
+data/polymarket/data/
 
+# Generated artifacts
+data/processed/
+data/paper_trades/
+*.pkl
+*.joblib
+*.h5
 
 # IDE
 .vscode/
