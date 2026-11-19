@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parlay Guard | Live</title>
+<style>
+:root{color-scheme:dark;--bg:#0c1220;--panel:#172235;--panel2:#202f46;--line:#31445f;--text:#f0f4fb;--muted:#a5b6ce;--green:#8ee0ad;--amber:#f0cb83;--red:#f4a4a4}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+main{max-width:1140px;margin:auto;padding:32px 20px 80px}header{display:flex;justify-content:space-between;gap:18px;align-items:center;flex-wrap:wrap}h1{font-size:28px;margin:0;letter-spacing:-.6px}h2{font-size:18px;margin:0}.muted,small{color:var(--muted)}.sub{margin:6px 0 0}.button{background:#e4ebf7;color:#142238;border:0;border-radius:9px;padding:10px 16px;font-weight:700;cursor:pointer}.button:disabled{opacity:.55;cursor:wait}.button:hover:not(:disabled){background:white}.link{color:#b9d7ff;text-decoration:none;margin-left:12px}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:24px 0}.stat{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:17px}.stat span{display:block;color:var(--muted);font-size:12px}.stat strong{display:block;font-size:25px;margin-top:3px}.toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:20px 0 14px}.toolbar select{background:var(--panel);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:9px}.cards{display:grid;gap:12px}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:19px}.card-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.match{font-size:20px;font-weight:700}.pill{border:1px solid var(--line);background:var(--panel2);padding:5px 10px;border-radius:30px;font-size:12px;font-weight:750}.pill.REVIEW{color:var(--green)}.pill.SKIP,.pill.NO_QUOTE{color:var(--red)}.pill.HOLD,.pill.NO_EDGE{color:var(--amber)}.metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-top:18px}.metric span{display:block;color:var(--muted);font-size:12px}.metric strong{display:block;font-size:18px;margin-top:3px}.reason{border-top:1px solid var(--line);padding-top:12px;margin:16px 0 0;color:var(--muted);font-size:13px}.note{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:15px;margin-top:24px;font-size:13px;color:var(--muted)}.message{padding:14px;border:1px solid var(--line);border-radius:10px;margin-top:14px;color:var(--muted)}.message.error{color:var(--red)}.hidden{display:none}code{color:#d2e5ff}
+@media(max-width:750px){.stats{grid-template-columns:repeat(2,1fr)}.metrics{grid-template-columns:repeat(2,1fr)}.match{font-size:17px}h1{font-size:24px}}
+</style>
+</head>
+<body><main>
+<header><div><h1>Parlay Guard <span class="muted">/ Live</span></h1><p class="sub muted">NBA Elo forecasts · Polymarket asks · Roster safety filter</p></div><div><button class="button" id="refresh">Refresh data</button><a class="link" href="/">Static report</a></div></header>
+<div class="stats"><div class="stat"><span>Upcoming games</span><strong id="count">—</strong></div><div class="stat"><span>Pass roster check</span><strong id="clear">—</strong></div><div class="stat"><span>Model-edge candidates</span><strong id="candidates">—</strong></div><div class="stat"><span>Blocked / held</span><strong id="blocked">—</strong></div></div>
+<div id="status" class="message" role="status">Loading today's forecasts…</div>
+<div class="toolbar"><h2>Upcoming matchups</h2><div><label class="muted" for="filter">Show </label><select id="filter"><option value="all">All games</option><option value="review">Estimated value</option><option value="risk">Roster risks</option></select></div></div>
+<div class="cards" id="games"></div>
+<div class="note">Research only — no bets are placed. This view reads today's pre-tipoff prediction CSV, requests Polymarket best asks, and applies a 5 percentage-point Elo probability cushion plus a hypothetical 2¢ purchase-price premium. An estimated ROI over 5% is a review signal, not proven profit. Missing or stale roster checks block eligibility. Ask-side depth and fees are not verified.</div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let snapshot = [], quotes = new Map(), lastQuoteAt = null;
+let busy = false;
+function pct(x){return x == null || !Number.isFinite(Number(x)) ? '—' : (Number(x)*100).toFixed(1)+'%'}
+function price(x){return x == null || !Number.isFinite(Number(x)) ? '—' : '$'+Number(x).toFixed(3)}
+function time(x){return x ? new Date(x).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—'}
+function el(tag, cls, value){const n=document.createElement(tag);if(cls)n.className=cls;if(value!=null)n.textContent=value;return n}
+function metric(label,value){const div=el('div','metric');div.append(el('span','',label),el('strong','',value));return div}
+function updateCounts(){
+  $('count').textContent=snapshot.length;
+  $('clear').textContent=snapshot.filter(g=>g.roster_risk==='CLEAR').length;
+  $('candidates').textContent=snapshot.filter(g=>quotes.get(g.game_id)?.status==='REVIEW').length;
+  $('blocked').textContent=snapshot.filter(g=>g.roster_risk!=='CLEAR').length;
+}
+function render(){
+  updateCounts();const filter=$('filter').value, root=$('games');root.replaceChildren();
+  for(const g of snapshot){
+    const q=quotes.get(g.game_id), status=q?.status ?? (g.roster_risk==='CLEAR'?'LOADING':'SKIP');
+    if(filter==='review' && status!=='REVIEW')continue;
+    if(filter==='risk' && g.roster_risk==='CLEAR')continue;
+    const card=el('article','card');const head=el('div','card-head');
+    const match=el('div','match',`${g.away} @ ${g.home}`);
+    const pill=el('span','pill '+status,status==='LOADING'?'WAITING FOR QUOTE':status);
+    head.append(match,pill);card.append(head);
+    const tip=el('small','',`Tipoff: ${time(g.tipoff_utc)} · Elo pick: ${g.selected_team}`);card.append(tip);
+    const m=el('div','metrics');
+    m.append(metric('Elo win probability',pct(g.selected_probability)),
+             metric('Home / Away Elo',`${g.home_elo?.toFixed(0)??'—'} / ${g.away_elo?.toFixed(0)??'—'}`),
+             metric('Best ask',price(q?.ask)),
+             metric('Assumed entry price',price(q?.effective_price)),
+             metric('Estimated ROI',pct(q?.estimated_roi)));
+    card.append(m);
+    const reasons=g.roster_checks.filter(c=>c.status!=='CLEAR').map(c=>`${c.team}: ${c.status} (${c.reason})`);
+    const text=[q?.reason??'Waiting for live quote', ...reasons].join(' · ');
+    card.append(el('p','reason',text));root.append(card);
+  }
+  if(!root.children.length)root.append(el('p','muted',snapshot.length?'No games match the current filter.':'No upcoming games with valid pre-tipoff forecasts.'));
+}
+async function json(url, timeoutMs){
+  const controller=new AbortController(), timer=setTimeout(()=>controller.abort(),timeoutMs);
+  try {const response=await fetch(url,{cache:'no-store',signal:controller.signal});
+       const body=await response.json();if(!response.ok)throw new Error(body.detail||`HTTP ${response.status}`);return body}
+  finally{clearTimeout(timer)}
+}
+async function refresh(){
+  if(busy)return;busy=true;$('refresh').disabled=true;
+  $('status').className='message';$('status').textContent='Loading today’s prediction snapshot…';
+  try{
+    const data=await json('/api/live/games',15000);
+    snapshot=data.games;quotes=new Map();render();
+    if(!snapshot.length){$('status').textContent=data.notice;return}
+    $('status').textContent=`Forecast: ${data.source} · Checking live market prices…`;
+    try{
+      const market=await json('/api/live/quotes',120000);
+      quotes=new Map(market.results.map(r=>[r.game_id,r]));lastQuoteAt=market.updated_at_utc;
+      $('status').textContent=`Forecast: ${data.source} · Quotes fetched: ${time(lastQuoteAt)} · ${market.notice}`;
+    }catch(error){$('status').className='message error';$('status').textContent=`Live quotes unavailable: ${error.message}. Predictions and roster checks are still shown.`}
+    render();
+  }catch(error){snapshot=[];quotes=new Map();render();$('status').className='message error';$('status').textContent=`Unable to load forecasts: ${error.message}`}
+  finally{busy=false;$('refresh').disabled=false}
+}
+$('refresh').addEventListener('click',refresh);
+$('filter').addEventListener('change',render);
+refresh();setInterval(refresh,120000);
+</script>
+</body></html>

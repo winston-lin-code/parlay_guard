@@ -11,7 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 REPORT = ROOT / 'models' / 'parlay_guard_v1_vs_v2.html'
 
 app = FastAPI(title='Parlay Guard', version='0.1.0')
-
+from .live_dashboard_api import router as live_dashboard_router
+app.include_router(live_dashboard_router)
 @app.get('/api/health')
 def health():
     return {'status': 'ok', 'dashboard_available': REPORT.is_file()}

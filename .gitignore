@@ -12,6 +12,9 @@ __pycache__/
 venv/
 .env
 .env.*
+data/
+*.parquet
+
 
 # IDE
 .vscode/
@@ -34,7 +37,8 @@ Desktop.ini
 models/live_predictions_*.csv
 models/polymarket_ev_*.csv
 models/parlay_guard_*.html
-
+models/*.joblib
+models/live_predictions_*.csv
 # Secrets
 secrets.json
 credentials.jsongit remote

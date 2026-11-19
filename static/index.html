@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Parlay Guard</title>
+</head>
+<body>
+    <h1>Parlay Guard</h1>
+    <p id="last-updated"></p>
+    <div id="games"></div>
+
+    <script>
+        async function loadGames() {
+            try {
+                const response = await fetch("/api/games");
+                if (!response.ok) throw new Error("API failed");
+
+                const games = await response.json();
+                const container = document.getElementById("games");
+
+                container.replaceChildren();
+
+                for (const game of games) {
+                    const card = document.createElement("div");
+
+                    const title = document.createElement("h3");
+                    title.textContent = game.matchup;
+
+                    const details = document.createElement("p");
+                    details.textContent =
+                        `Elo: ${(game.elo_probability * 100).toFixed(1)}% | ` +
+                        `EV: ${(game.expected_ev * 100).toFixed(1)}%`;
+
+                    const status = document.createElement("p");
+                    status.textContent =
+                        `${game.status}: ${game.reason}`;
+
+                    card.append(title, details, status);
+                    container.appendChild(card);
+                }
+
+                document.getElementById("last-updated").textContent =
+                    `Refreshed: ${new Date().toLocaleTimeString()}`;
+            } catch (error) {
+                console.error(error);
+            }
+        }
+
+        loadGames();
+
+        // Refresh every 30 seconds
+        setInterval(loadGames, 30000);
+    </script>
+</body>
+</html>
