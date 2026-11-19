@@ -21,3 +21,10 @@ venv/
 # Secrets
 .env
 .env.*
+# Trained machine learning models
+*.joblib
+*.pkl
+
+# Temporary merge files
+live_local.html
+live_remote.html
