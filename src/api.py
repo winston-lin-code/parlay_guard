@@ -17,9 +17,7 @@ LIVE=ROOT/'static/live.html'
 ARCHIVE=ROOT/'models/parlay_guard_v1_vs_v2.html'
 ARCHIVE_STRATEGY=ROOT/'models/parlay_comparison.html'
 
-app = FastAPI(title='Parlay Guard', version='0.1.0')
 from .live_dashboard_api import router as live_dashboard_router
-app.include_router(live_dashboard_router)
 
 class LiveState:
     def __init__(self):
@@ -95,6 +93,7 @@ async def lifespan(app:FastAPI):
     state.shutdown()
 
 app=FastAPI(title='Parlay Guard Auto Live',version='0.4',lifespan=lifespan)
+app.include_router(live_dashboard_router)
 
 @app.get('/',response_class=HTMLResponse)
 def dashboard():
