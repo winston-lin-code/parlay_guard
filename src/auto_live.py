@@ -213,7 +213,10 @@ def latest_game_forecasts(events,now):
     by_match={}
     dates={g['game_date'] for g in events}
     for day in dates:
-        files=sorted((ROOT/'models').glob(f'live_predictions_{day}_*.csv'),reverse=True)
+        files=sorted(
+            (ROOT / 'models').glob(f'live_predictions_v1_{day}_*.csv'),
+            reverse=True
+        )
         for path in files[:5]:
             try: data=pd.read_csv(path,dtype={'GAME_ID':str})
             except (OSError,ValueError):continue
@@ -242,18 +245,19 @@ def latest_game_forecasts(events,now):
 
 def lines_from_history(now,errors):
     try:
-        from .predict_today import load_history,clean_team_history,make_completed_games
+        from .predict_today import (
+            load_history,
+            clean_team_history,
+            make_completed_games,
+            fetch_current_season,
+        )
         from .common import DATA
         day=now.astimezone(ET).date()
         past=load_history(DATA/'nba_games_updated.csv')
         season=f'{day.year}-{(day.year+1)%100:02d}' if day.month>=7 else f'{day.year-1}-{day.year%100:02d}'
         current_path=DATA/f'nba_{season.replace("-","_")}_latest_raw.csv'
         if not current_path.exists():raise FileNotFoundError(f'{current_path.name} not found')
-        current=pd.read_csv(current_path,dtype={'GAME_ID':str,'TEAM_ID':str})
-        if 'IS_HOME' not in current:
-            if 'MATCHUP' not in current:raise ValueError('Missing MATCHUP for current team logs')
-            current['IS_HOME']=current.MATCHUP.astype(str).str.contains('vs.',regex=False)
-        current['SEASON']=season
+        current = fetch_current_season(season, current_path)
         historical=clean_team_history(past,current,day)
         completed=make_completed_games(historical)
         models,hist,metrics=fit_line_models(completed)
@@ -329,7 +333,7 @@ def run_update(*,max_games=10,fetch_players=True,refresh_team=True):
         if not events:
             return assemble_data([],{},None,None,{}, {},{},now,['No future NBA game markets available.'])
         # The established scanner is the single source for market settlement rules.
-        _command(['polymarket_nba_ev.py','--pages','2','--max-games',str(max_games),
+        _command(['src/polymarket_nba_ev.py','--pages','2','--max-games',str(max_games),
                   '--no-orderbooks'],timeout=80)
         if fetch_players:
             day=now.astimezone(ET).date()
@@ -343,12 +347,12 @@ def run_update(*,max_games=10,fetch_players=True,refresh_team=True):
         history_path=OVERLAY if OVERLAY.exists() else BASE_HISTORY
         prediction_ok=True
         try:
-            _command(['predict_current_props.py','--history',str(history_path),
+            _command(['-m','src.predict_current_props','--history',str(history_path),
                       '--max-history-age-days','4'],timeout=120)
         except Exception as exc:
             prediction_ok=False
             warnings.append('Player projections unavailable: '+str(exc)[:155])
-        _command(['polymarket_nba_ev.py','--pages','2','--max-games',str(max_games)],timeout=150)
+        _command(['src/polymarket_nba_ev.py','--pages','2','--max-games',str(max_games)],timeout=150)
         try:
             _command(['screen_prop_ev.py','--stake','20'],timeout=55)
         except Exception as exc:
