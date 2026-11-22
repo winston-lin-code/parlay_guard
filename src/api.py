@@ -70,6 +70,18 @@ class LiveState:
                     }
                     output.setdefault('warnings', []).append(
                         'Same-game paper comparison: '+str(comparison_exc)[:150])
+                # Opt-in simulated order intents. Defaults OFF; never submits live orders.
+                if os.getenv('PG_ENABLE_PAPER_AUTO') == '1':
+                    try:
+                        from .paper_auto_execution import on_live_refresh as paper_auto_refresh
+                        output['paper_auto_execution'] = paper_auto_refresh(output, ROOT)
+                    except Exception as auto_exc:
+                        output['paper_auto_execution'] = {
+                            'paper_only': True, 'error': str(auto_exc)[:200],
+                            'assumed_fills': [],
+                        }
+                        output.setdefault('warnings', []).append(
+                            'Paper auto execution failed: ' + str(auto_exc)[:140])
                 # Only publish fully assembled snapshots. A failed upstream
                 # refresh never replaces the last usable results with partial CSVs.
                 with self.lock:
