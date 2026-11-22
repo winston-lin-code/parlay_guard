@@ -70,8 +70,17 @@ class LiveState:
                     }
                     output.setdefault('warnings', []).append(
                         'Same-game paper comparison: '+str(comparison_exc)[:150])
-                # Opt-in simulated order intents. Defaults OFF; never submits live orders.
+                # Opt-in paper-only portfolio. Verify completed NBA games first so
+                # settled hypothetical returns can free simulated cash before new entries.
                 if os.getenv('PG_ENABLE_PAPER_AUTO') == '1':
+                    try:
+                        from .paper_portfolio import settle_pending
+                        output['paper_settlement_scan'] = settle_pending(ROOT)
+                    except Exception as settle_exc:
+                        output['paper_settlement_scan'] = {
+                            'paper_only': True, 'error': str(settle_exc)[:200]}
+                        output.setdefault('warnings', []).append(
+                            'Paper portfolio settlement: ' + str(settle_exc)[:140])
                     try:
                         from .paper_auto_execution import on_live_refresh as paper_auto_refresh
                         output['paper_auto_execution'] = paper_auto_refresh(output, ROOT)
@@ -231,3 +240,21 @@ def same_game_comparison_page():
     if not page.is_file():
         raise HTTPException(503, 'Comparison dashboard page missing')
     return FileResponse(page, media_type='text/html', headers={'Cache-Control':'no-store'})
+
+
+# Read-only simulated bankroll / verified NBA result dashboard.
+@app.get('/api/paper-auto/summary')
+def paper_auto_summary():
+    from .paper_portfolio import portfolio_report
+    data = portfolio_report(ROOT)
+    data['capture_enabled'] = os.getenv('PG_ENABLE_PAPER_AUTO') == '1'
+    return JSONResponse(data, headers={'Cache-Control': 'no-store, max-age=0'})
+
+
+@app.get('/paper-auto', response_class=HTMLResponse)
+def paper_auto_page():
+    page = ROOT / 'static/paper_auto_dashboard.html'
+    if not page.is_file():
+        raise HTTPException(503, 'Paper automation dashboard missing')
+    return FileResponse(page, media_type='text/html',
+                        headers={'Cache-Control': 'no-store'})
