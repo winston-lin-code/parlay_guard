@@ -1,0 +1,38 @@
+name: Paper Portfolio Tests
+
+on:
+  pull_request:
+    paths:
+      - 'src/paper_auto_execution.py'
+      - 'src/paper_portfolio.py'
+      - 'src/auto_live.py'
+      - 'src/api.py'
+      - 'tests/test_paper_auto_execution.py'
+      - 'tests/test_paper_portfolio.py'
+      - 'tests/test_paper_portfolio_api.py'
+      - '.github/workflows/paper-portfolio-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  paper-only-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Run paper accounting, API and live dashboard tests
+        env:
+          PG_DISABLE_AUTO_REFRESH: '1'
+          PG_ENABLE_PAPER_AUTO: '0'
+        run: python -m pytest -q tests/test_paper_auto_execution.py tests/test_paper_portfolio.py tests/test_paper_portfolio_api.py tests/test_live.py
