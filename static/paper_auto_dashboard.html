@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parlay Guard — Paper Portfolio</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0c1220; --panel:#151e30; --border:#2a3950;
+      --muted:#9faec1; --text:#eef4fc; --accent:#77bdf7; --good:#65d8a3; --bad:#f69d9d; }
+    * { box-sizing: border-box; } body { margin:0; background:var(--bg); color:var(--text);
+      font:14px/1.55 system-ui, -apple-system, Segoe UI, Arial, sans-serif; }
+    main { max-width:1280px; margin:0 auto; padding:30px 22px 60px; }
+    header, .between { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+    h1 { font-size:31px; line-height:1.2; margin:4px 0 8px; letter-spacing:-.025em; }
+    h2 { font-size:18px; margin:0 0 16px; } .muted { color:var(--muted); }
+    a { color:var(--accent); } .topnav { display:flex; gap:18px; flex-wrap:wrap; align-items:center; }
+    .subtitle { margin:0; max-width:780px; } .eyebrow { color:var(--accent); font-weight:700;
+      font-size:12px; letter-spacing:.14em; text-transform:uppercase; }
+    .banner { border:1px solid var(--border); background:#162236; border-radius:12px;
+      margin:22px 0; padding:12px 16px; color:#c9d6e7; }
+    .metrics { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:12px; margin:20px 0; }
+    .card { background:var(--panel); border:1px solid var(--border); padding:19px;
+      border-radius:13px; min-width:0; }
+    .stat-name { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+    .stat-val { font-size:27px; line-height:1.3; letter-spacing:-.03em; font-weight:700;
+      margin:8px 0 4px; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+    .stat-foot { font-size:12px; color:var(--muted); } .positive { color:var(--good); }
+    .negative { color:var(--bad); } .badge { display:inline-block; padding:3px 10px; border-radius:100px;
+      background:#283a50; font-size:12px; font-weight:600; }
+    section { margin-top:22px; } .layout { display:grid; grid-template-columns:2fr 1fr; gap:14px; }
+    .chart-wrap { height:230px; width:100%; } svg { display:block; width:100%; height:100%; }
+    .key { font-size:12px; color:var(--muted); margin-top:12px; }
+    button { padding:9px 15px; border-radius:8px; border:1px solid #4c6580;
+      background:#253c56; color:white; cursor:pointer; font-weight:600; }
+    button:hover { background:#304e70; } button:disabled { opacity:.55; cursor:wait; }
+    .scroll { overflow-x:auto; } table { width:100%; border-collapse:collapse; min-width:700px; }
+    th { text-align:left; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+    th,td { border-bottom:1px solid var(--border); padding:11px 10px; white-space:nowrap; }
+    td { font-variant-numeric:tabular-nums; }
+    .empty { padding:26px; text-align:center; color:var(--muted); }
+    .section-note { font-size:12px; color:var(--muted); margin:0 0 15px; }
+    .smallmetric { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:10px 0; }
+    .smallmetric strong { display:block; margin-top:3px; font-size:17px; }
+    .footer-note { color:var(--muted); font-size:12px; line-height:1.6; margin-top:24px; }
+    @media(max-width:980px) { .metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .layout { grid-template-columns:1fr; } }
+    @media(max-width:500px) { main { padding:20px 13px 40px; }
+      h1 { font-size:25px; } .metrics { gap:8px; } .card { padding:14px; }
+      .stat-val { font-size:23px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <div class="eyebrow">Parlay Guard / NBA research</div>
+        <h1>Paper Trading Portfolio</h1>
+        <p class="subtitle muted">Automatically logged simulated moneyline entries · verified NBA final scores · no live execution</p>
+      </div>
+      <nav class="topnav" aria-label="Dashboard links">
+        <a href="/">Live games</a>
+        <a href="/moneyline-tracker">Strategy tracker</a>
+        <button id="refresh" type="button">Refresh view</button>
+      </nav>
+    </header>
+
+    <div class="banner" role="status">
+      <strong id="capture-status">Loading paper portfolio…</strong>
+      <span id="capture-detail"> No exchange orders are sent.</span>
+    </div>
+
+    <div class="metrics">
+      <div class="card"><div class="stat-name">Simulated cash available</div><div class="stat-val" id="cash">—</div>
+        <div class="stat-foot">Starting bankroll <span id="initial">—</span></div></div>
+      <div class="card"><div class="stat-name">Open stakes reserved</div><div class="stat-val" id="reserved">—</div>
+        <div class="stat-foot"><span id="open-count">—</span> unresolved positions</div></div>
+      <div class="card"><div class="stat-name">Realized paper P&amp;L</div><div class="stat-val" id="pnl">—</div>
+        <div class="stat-foot">ROI on settled stakes: <span id="roi">—</span></div></div>
+      <div class="card"><div class="stat-name">Book-value paper equity</div><div class="stat-val" id="equity">—</div>
+        <div class="stat-foot">Open stakes at cost, not live market value</div></div>
+    </div>
+
+    <div class="layout">
+      <section class="card">
+        <h2>Realized-equity curve</h2>
+        <p class="section-note">Only verified NBA game outcomes contribute; unsettled positions are excluded from realized P&amp;L.</p>
+        <div class="chart-wrap"><svg viewBox="0 0 720 210" preserveAspectRatio="none"
+             role="img" aria-label="Simulated realized equity over settled game results" id="curve"></svg></div>
+        <p class="key" id="curve-status">No settled NBA games yet.</p>
+      </section>
+      <section class="card">
+        <h2>Outcome summary</h2>
+        <div class="smallmetric"><div><span class="muted">Settled positions</span><strong id="settled-count">—</strong></div>
+          <div><span class="muted">Wins / losses</span><strong id="record">—</strong></div></div>
+        <div class="smallmetric"><div><span class="muted">Max realized drawdown</span><strong id="dd">—</strong></div>
+          <div><span class="muted">Drawdown rate</span><strong id="dd-pct">—</strong></div></div>
+        <p class="section-note">Drawdown measures only the sequence of settled simulated results. It omits intraday market changes and unrealized losses.</p>
+      </section>
+    </div>
+
+    <section class="card">
+      <h2>Execution-price sensitivity</h2>
+      <p class="section-note">Same recorded picks, $5 assumed stake per entry, and verified NBA game outcomes. Each scenario simulates buying at observed ask plus an added price premium. These are not measured fees or fills.</p>
+      <div class="scroll"><table>
+        <thead><tr><th>Assumed acquisition price</th><th>Settled entries</th><th>Simulated realized P&amp;L</th><th>Simulated ROI</th></tr></thead>
+        <tbody id="scenarios"><tr><td colspan="4" class="empty">No settled entries yet</td></tr></tbody>
+      </table></div>
+    </section>
+
+    <section class="card">
+      <div class="between"><h2>Simulated positions</h2><span id="last-updated" class="muted">—</span></div>
+      <p class="section-note">A “WIN” or “LOSS” means a result verified against paired NBA team box scores, not Polymarket's final contract resolution.</p>
+      <div class="scroll"><table>
+        <thead><tr><th>Event</th><th>Side</th><th>Status</th><th>Observed ask</th><th>Assumed buy</th><th>Stake</th><th>Model chance</th><th>Stressed EV</th><th>Paper P&amp;L</th></tr></thead>
+        <tbody id="positions"><tr><td colspan="9" class="empty">No paper positions yet</td></tr></tbody>
+      </table></div>
+    </section>
+    <p class="footer-note">Research simulation only. Fills are assumed, not actually executable; market settlement, fees, slippage, lineup availability, and model calibration are not verified. Cash and P&amp;L are simulated and must never be treated as exchange balances or realized trading profits. All values in USD.</p>
+  </main>
+  <script>
+    "use strict";
+    const $ = id => document.getElementById(id);
+    const money = value => Number.isFinite(value)
+      ? new Intl.NumberFormat('en-US', {style:'currency',currency:'USD'}).format(value) : '—';
+    const pct = value => Number.isFinite(value) ? (value * 100).toFixed(1) + '%' : '—';
+    const num = value => Number.isFinite(value) ? value.toFixed(3) : '—';
+    const put = (id, val) => { $(id).textContent = String(val); };
+    const cell = (tr, value, css='') => {
+      const td = document.createElement('td');
+      td.textContent = String(value);
+      if(css) td.className = css;
+      tr.append(td);
+    };
+    function renderRows(target, data, fields, emptyLabel) {
+      const tbody=$(target); tbody.replaceChildren();
+      if(!data.length) {
+        const tr=document.createElement('tr');
+        const td=document.createElement('td');
+        td.colSpan=fields.length; td.className='empty'; td.textContent=emptyLabel;
+        tr.append(td); tbody.append(tr); return;
+      }
+      for(const row of data) {
+        const tr=document.createElement('tr');
+        for(const field of fields) {
+          const val=field.value(row);
+          cell(tr,val,field.css ? field.css(row) : '');
+        }
+        tbody.append(tr);
+      }
+    }
+    function chart(curve) {
+      const svg=$('curve'); svg.replaceChildren();
+      if(curve.length < 2) { put('curve-status','At least one verified NBA result is required to draw the curve.'); return; }
+      const values=curve.map(p=>p.realized_equity);
+      const low=Math.min(...values), high=Math.max(...values);
+      const span=Math.max(high-low,1);
+      const x=i=>42+i*(650/(values.length-1));
+      const y=v=>170-(v-low)/span*136;
+      const svgNS='http://www.w3.org/2000/svg';
+      const draw=(name,attrs)=>{
+        const e=document.createElementNS(svgNS,name);
+        Object.entries(attrs).forEach(([k,v])=>e.setAttribute(k,String(v)));
+        svg.append(e); return e;
+      };
+      for(let i=0;i<3;i++) {
+        const value=low+span*i/2, yy=y(value);
+        draw('line',{x1:42,x2:703,y1:yy,y2:yy,stroke:'#31435b','stroke-dasharray':'4 7'});
+        const label=draw('text',{x:4,y:yy+4,fill:'#a4b2c4','font-size':12});
+        label.textContent=money(value);
+      }
+      const polyline=values.map((v,i)=>x(i).toFixed(2)+','+y(v).toFixed(2)).join(' ');
+      draw('polyline',{points:polyline,stroke:'#65d8a3','stroke-width':3,
+                      fill:'none','stroke-linejoin':'round','stroke-linecap':'round'});
+      for(let i=0;i<values.length;i++) draw('circle',{cx:x(i),cy:y(values[i]),r:3.5,fill:'#65d8a3'});
+      put('curve-status',curve.length-1+' verified NBA game result(s) · starting value '+money(values[0])+
+          ' · latest realized-equity value '+money(values[values.length-1]));
+    }
+    function render(data) {
+      const s=data.summary || {};
+      put('capture-status',data.capture_enabled ? 'PAPER AUTO-CAPTURE ON' : 'PAPER AUTO-CAPTURE OFF');
+      put('capture-detail',data.capture_enabled
+        ? ' New paper entries and NBA-result checks run on scheduled live refreshes.'
+        : ' To start simulated entries, set PG_ENABLE_PAPER_AUTO=1 before launching the server.');
+      put('cash',money(s.available_cash)); put('initial',money(s.starting_bankroll));
+      put('reserved',money(s.reserved_open_stakes)); put('open-count',s.open_positions ?? 0);
+      put('pnl',money(s.realized_paper_pnl)); put('roi',pct(s.settled_paper_roi));
+      $('pnl').className='stat-val '+(s.realized_paper_pnl>0?'positive':s.realized_paper_pnl<0?'negative':'');
+      put('equity',money(s.book_value_paper_equity));
+      put('settled-count',s.settled_trades ?? 0); put('record',(s.wins ?? 0)+' / '+(s.losses ?? 0));
+      put('dd',money(s.max_realized_drawdown)); put('dd-pct',pct(s.max_realized_drawdown_pct));
+      chart(data.equity_curve || []);
+      renderRows('scenarios', data.execution_cost_scenarios || [], [
+        {value:r=>'Observed ask + '+r.ask_premium_cents+'¢'+(r.ask_premium_cents===1?' (pilot assumption)':'')},
+        {value:r=>r.settled_trades},
+        {value:r=>money(r.simulated_profit),css:r=>r.simulated_profit>0?'positive':r.simulated_profit<0?'negative':''},
+        {value:r=>pct(r.simulated_roi)}
+      ],'No settled paper entries to compare yet');
+      renderRows('positions', data.positions || [], [
+        {value:r=>r.event_slug},{value:r=>r.team},
+        {value:r=>r.status==='PENDING_NBA_VERIFICATION'?'Awaiting NBA verification':r.status,
+          css:r=>r.status==='WIN'?'positive':r.status==='LOSS'?'negative':'muted'},
+        {value:r=>num(r.observed_ask)},{value:r=>num(r.assumed_fill_price)},
+        {value:r=>money(r.stake)},{value:r=>pct(r.model_probability)},
+        {value:r=>pct(r.stressed_roi)},{value:r=>money(r.simulated_pnl),
+          css:r=>r.simulated_pnl>0?'positive':r.simulated_pnl<0?'negative':''}
+      ],'No qualifying simulated positions have been recorded.');
+      put('last-updated','Local view: '+new Date().toLocaleTimeString());
+    }
+    async function refresh() {
+      const button=$('refresh'); button.disabled=true;
+      try {
+        const response=await fetch('/api/paper-auto/summary',{cache:'no-store'});
+        if(!response.ok) throw new Error('HTTP '+response.status);
+        render(await response.json());
+      } catch(error) {
+        put('capture-status','Portfolio unavailable');
+        put('capture-detail',' Error: '+error.message);
+      } finally { button.disabled=false; }
+    }
+    $('refresh').addEventListener('click',refresh);
+    refresh();
+    setInterval(refresh,30_000);
+  </script>
+</body>
+</html>
