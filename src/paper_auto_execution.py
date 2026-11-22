@@ -13,10 +13,12 @@ import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = Path("data/paper_trades/auto_execution.sqlite3")
-NBA_SLUG = re.compile(r"^nba-[a-z]{2,4}-[a-z]{2,4}-\d{4}-\d{2}-\d{2}$")
+NBA_SLUG = re.compile(r"^nba-([a-z]{2,4})-([a-z]{2,4})-(\d{4}-\d{2}-\d{2})$")
+ET = ZoneInfo("America/New_York")
 
 # First-pilot simulation parameters, not evidence of a trading edge.
 STAKE_CENTS = 500
@@ -52,13 +54,18 @@ def _num(value):
 def _candidate(game, now):
     """Return (candidate, skip_reason). Fail closed on missing data."""
     slug = str(game.get("slug") or "")
-    if not NBA_SLUG.fullmatch(slug):
+    match = NBA_SLUG.fullmatch(slug)
+    if not match:
         return None, "invalid_event"
     tip = _utc(game.get("tipoff_utc"))
     if tip is None or not MIN_LEAD_TIME <= tip - now <= MAX_LEAD_TIME:
         return None, "outside_pregame_window"
     home = str(game.get("home") or "").upper()
     away = str(game.get("away") or "").upper()
+    slug_away, slug_home, slug_day = match.groups()
+    if (away != slug_away.upper() or home != slug_home.upper()
+            or tip.astimezone(ET).date().isoformat() != slug_day):
+        return None, "event_identity_or_date_mismatch"
     forecast = game.get("winner_forecast") or {}
     chosen = str(forecast.get("predicted_winner") or "").upper()
     p_home = _num(forecast.get("home_probability"))
@@ -130,6 +137,9 @@ def on_live_refresh(snapshot, root=ROOT, *, at=None):
             quote_observed_at_utc TEXT NOT NULL, fill_status TEXT NOT NULL
         )""")
         db.execute("BEGIN IMMEDIATE")
+        from .paper_portfolio import _ensure_tables, _available_cash_cents
+        _ensure_tables(db)
+        available_cash = _available_cash_cents(db)
         utc_day = now.date().isoformat()
         spent = db.execute("SELECT COALESCE(SUM(stake_cents),0) FROM paper_entries WHERE utc_day=?",
                            (utc_day,)).fetchone()[0]
@@ -140,6 +150,9 @@ def on_live_refresh(snapshot, root=ROOT, *, at=None):
                 continue
             if spent + STAKE_CENTS > DAILY_CAP_CENTS:
                 out["skipped"][slug] = "daily_paper_cap"
+                continue
+            if available_cash < STAKE_CENTS:
+                out["skipped"][slug] = "insufficient_paper_cash"
                 continue
             db.execute("""INSERT INTO paper_entries (
                 event_slug,captured_at_utc,utc_day,team,token_id,stake_cents,
@@ -153,8 +166,10 @@ def on_live_refresh(snapshot, root=ROOT, *, at=None):
                 "ASSUMED_PAPER_FILL_NOT_EXECUTABLE",
             ))
             spent += STAKE_CENTS
+            available_cash -= STAKE_CENTS
             out["assumed_fills"].append(row)
     out["daily_paper_exposure_dollars"] = spent / 100
+    out["paper_cash_available_dollars"] = available_cash / 100
     return out
 
 
