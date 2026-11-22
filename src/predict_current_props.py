@@ -35,7 +35,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from parlay_guard.src.player_prop_common import (
+from .player_prop_common import (
     FEATURES, TARGETS, TEAM_ID_TO_ABBR, audit_feature_parity,
     build_feature_row, name_key, prepare_history, season_of_date,
 )

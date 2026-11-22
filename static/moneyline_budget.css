@@ -1,0 +1,28 @@
+/* PARLAY_GUARD_BANKROLL_ALLOCATOR_V1 */
+.pg-matchup{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+.pg-team{display:flex;align-items:center;gap:9px;min-width:155px;flex:1}
+.pg-team-label{display:flex;flex-direction:column;line-height:1.25}
+.pg-team-label small{font-size:12px}.pg-team-label strong{font-size:17px;letter-spacing:-.2px}
+.pg-at{font-weight:800;color:var(--muted);font-size:18px}
+.pg-logo{width:52px;height:52px;display:grid;place-items:center;flex:none;background:rgba(255,255,255,.07);border:1px solid var(--line);border-radius:13px;overflow:hidden}
+.pg-logo-image{max-width:45px;max-height:45px;object-fit:contain}
+.pg-logo-fallback{font-size:11px;font-weight:800}
+.pg-planner{border:1px solid var(--line);border-radius:16px;background:var(--panel);padding:22px}
+.pg-planner .pg-sub{color:var(--muted);margin:0 0 15px}
+.pg-budget-controls{display:flex;flex-wrap:wrap;align-items:end;gap:12px}
+.pg-budget-controls label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--muted);font-weight:700}
+.pg-budget-controls input{width:145px;max-width:100%;font-weight:700;font-size:18px}
+.pg-budget-controls select{min-width:140px}
+.pg-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:18px 0}
+.pg-sum{background:var(--soft);border-radius:10px;padding:12px}
+.pg-sum small{display:block;color:var(--muted);font-size:11px}
+.pg-sum strong{display:block;font-size:20px;margin-top:4px}
+.pg-plan-row{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px 0;border-top:1px solid var(--line)}
+.pg-plan-team,.pg-plan-numbers{display:flex;flex-direction:column}.pg-plan-numbers{text-align:right}
+.pg-plan-row small{font-size:12px}.pg-plan-numbers strong{font-size:18px}
+.pg-recommendation{background:rgba(117,232,179,.045);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:12px}
+.pg-reco-head{display:flex;align-items:center;justify-content:space-between;gap:9px}.pg-reco-head strong{font-size:18px}
+.pg-recommendation small{display:block;margin-top:4px}
+.pg-risk-note{font-size:12px;color:var(--muted);margin:14px 0 0}
+@media(max-width:820px){.pg-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.pg-team{min-width:118px}.pg-logo{width:42px;height:42px}.pg-logo-image{width:38px;height:38px}.pg-team-label strong{font-size:15px}}
+@media(max-width:430px){.pg-team{min-width:98px;gap:5px}.pg-at{font-size:14px}.pg-logo{width:35px;height:35px}.pg-logo-image{width:32px;height:32px}.pg-team-label strong{font-size:13px}.pg-plan-team small{font-size:11px}}

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi-Sport EV Portfolio | Parlay Guard</title>
+<style>
+:root{color-scheme:dark;--bg:#09111f;--card:#13243b;--edge:#304763;--soft:#1c3550;--muted:#b3c4d8;--text:#f2f6fc;--green:#7fe6b1;--yellow:#f6d18d;--red:#fa9ea5;--blue:#9ec5ff}
+*{box-sizing:border-box}body{background:var(--bg);color:var(--text);font:14px/1.45 system-ui,'Segoe UI',sans-serif;margin:0}
+main{max-width:1480px;margin:0 auto;padding:28px 22px 80px}h1{font-size:30px;margin:5px 0}h2{font-size:21px;margin:0 0 12px}h3{font-size:16px;margin:0}p{margin:5px 0 10px}a{color:var(--blue)}
+header{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:20px}.eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--green);font-weight:800}
+.panel,.card,.stat,.note{background:var(--card);border:1px solid var(--edge);border-radius:13px}.panel{padding:18px;margin:17px 0}.note{padding:12px 15px;color:var(--muted)}.note.warn{border-color:#745d3e;color:var(--yellow)}
+input,select,button{background:var(--soft);color:var(--text);border:1px solid var(--edge);border-radius:9px;padding:9px 10px;font:inherit}button{cursor:pointer}button:hover{border-color:var(--green)}button.primary{background:#1d664c;border-color:#50a47c;color:white;font-weight:800}button:disabled{opacity:.45;cursor:default}
+input[type=number]{width:112px}input[type=checkbox]{accent-color:#75dbad;width:17px;height:17px}input[type=search]{width:210px}.controls{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:12px}.field{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:12px;font-weight:650}.field input,.field select{font-size:14px}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:15px 0}.stat{padding:13px}.stat small{color:var(--muted)}.stat b{font-size:25px;display:block;margin-top:4px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.card{padding:16px;min-width:0}.card.eligible{border-color:#316c56}.head{display:flex;align-items:start;justify-content:space-between;gap:9px}.pill{font-size:11px;padding:3px 8px;border:1px solid var(--edge);border-radius:18px;white-space:nowrap}.pill.green{color:var(--green);border-color:#42785c}.pill.yellow{color:var(--yellow)}.pill.red{color:var(--red)}
+.match{display:flex;align-items:center;gap:10px;min-height:55px;margin:9px 0}.match img{width:40px;height:40px;object-fit:contain;flex-shrink:0}.match .teams{font-weight:750}.sub{color:var(--muted)}.small{font-size:12px}.row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.choice{display:flex;align-items:center;gap:10px;margin:12px 0}.choice select{flex:1;max-width:100%;min-width:0}
+.stats2{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.stats2 div{background:var(--soft);border-radius:8px;padding:9px}.stats2 small{display:block;color:var(--muted)}.stats2 strong{font-size:16px}.green{color:var(--green)}.red{color:var(--red)}.gold{color:var(--yellow)}.alert{font-size:12px;margin-top:12px;padding:10px;border-left:3px solid #a47a48;background:#342b26;border-radius:5px}.muted{color:var(--muted)}
+table{border-collapse:collapse;width:100%}th,td{text-align:left;border-bottom:1px solid var(--edge);padding:11px 10px;vertical-align:top}th{color:var(--muted);font-size:12px}td.num,th.num{text-align:right;white-space:nowrap}tbody tr:hover{background:#1b3048}.scroll{overflow-x:auto}
+.badge{display:inline-block;border-radius:12px;border:1px solid var(--edge);padding:2px 7px;font-size:11px;margin-right:5px}.footer{font-size:12px;color:var(--muted);margin-top:28px}.actions{display:flex;gap:8px;flex-wrap:wrap}.hidden{display:none}
+@media(max-width:930px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:520px){main{padding:15px 10px}.stats2{grid-template-columns:repeat(2,minmax(0,1fr))}.stat b{font-size:21px}}
+</style></head><body><main>
+<header><div><div class="eyebrow">Parlay Guard · paper-research tool</div><h1>Multi-Sport EV Portfolio</h1><p class="sub">Filter matchups, select moneylines, and allocate a percentage of your bankroll using EV and win probability.</p></div><nav><a href="/">NBA dashboard</a> · <a href="/college">College dashboard</a> · <a href="/moneyline-tracker">Frozen tracker</a></nav></header>
+<div class="note" id="health">Connecting to NBA and college game feeds…</div>
+<section class="panel"><h2>1. Find and select games</h2>
+ <div class="controls">
+ <label class="field">Date <select id="day"><option value="0">Today (ET)</option><option value="1">Tomorrow (ET)</option><option value="2">In two days (ET)</option></select></label>
+ <label class="field">Sport <select id="sport"><option value="all">All sports</option><option value="NBA">NBA</option><option value="NCAAB">College basketball</option><option value="NCAAF">College football</option><option value="NHL">NHL</option><option value="NFL">NFL</option><option value="SOCCER">Soccer</option><option value="MLB">MLB</option><option value="WNBA">WNBA</option></select></label>
+ <label class="field">Search team or matchup <input id="search" type="search" placeholder="School, city, team…"></label>
+ <label class="field">Minimum EV (%) <input id="minEV" type="number" min="0" max="100" step="0.5" value="5"></label>
+ <label class="field">Extra cost allowance (¢/share) <input id="feeCents" type="number" min="0" max="20" step="0.5" value="1"></label>
+ <label class="field" style="flex-direction:row;align-items:center;align-self:center"><input id="positive" type="checkbox"> Positive EV only</label>
+ <button id="reload">Refresh feed</button>
+ </div>
+ <div class="stats"><div class="stat"><small>Upcoming games</small><b id="gameCount">—</b></div><div class="stat"><small>Quote-eligible games</small><b id="eligibleCount">—</b></div><div class="stat"><small>Selected games</small><b id="selectedCount">0</b></div><div class="stat"><small>Sports with games</small><b id="sportCount">—</b></div></div>
+ <div class="actions" style="margin-bottom:15px"><button id="autoSelect">Select all qualifying visible games</button><button id="clear">Clear selections</button></div>
+ <div id="games" class="grid"></div>
+ </section>
+<section class="panel"><h2>2. Set your bankroll and risk budget</h2>
+ <p class="muted">Sizing uses the estimated win chance, YES price, a configurable cost allowance, and quarter-Kelly by default. It never forces the whole bankroll into trades.</p>
+ <div class="controls">
+ <label class="field">Total bankroll ($) <input id="bankroll" type="number" min="0.01" max="1000000" step="1" value="40"></label>
+ <label class="field">Today's maximum exposure (%) <input id="riskPct" type="number" min="0" max="100" step="1" value="5"></label>
+ <label class="field">Maximum per game (%) <input id="perGamePct" type="number" min="0" max="100" step="0.5" value="2"></label>
+ <label class="field">Kelly fraction (%) <input id="kellyPct" type="number" min="0" max="100" step="5" value="25"></label>
+ <label class="field">Already committed today ($) <input id="committed" type="number" min="0" step="0.01" value="0"></label>
+ <label class="field" style="flex-direction:row;align-items:center;align-self:center"><input id="allowFlagged" type="checkbox"> Include flagged college games in paper sizing</label>
+ </div>
+ <div class="actions"><button class="primary" id="generate">Generate paper allocation</button><button id="export" disabled>Export allocation CSV</button><button id="copy" disabled>Copy allocation</button></div>
+ <div id="allocation" class="note" style="margin-top:14px">Choose game cards above, then generate your allocation.</div>
+ </section>
+<section class="panel"><h2>3. Other-sports published EV watchlist</h2>
+ <p class="muted">NHL, NFL, soccer, MLB and more can be imported from an Owls Insight Polymarket EV report or your independently sourced probability + fresh YES ask CSV. Free sportsbook-only EV picks appear below for research, but are not allocated as Polymarket trades.</p>
+ <div id="watchlist" class="note">No sportsbook watchlist loaded.</div>
+ <p class="small sub">Other-sport sources: <code>data/online_ev_plans/YYYY-MM-DD.json</code> or <code>data/portfolio_other_sports.csv</code>. The latter is not populated automatically. See <code>docs/PORTFOLIO_GUIDE.md</code>.</p>
+ </section>
+<p class="footer">This portfolio is a hypothetical allocation of research moneylines only. No account balance is retrieved; no orders are placed. EV assumes the probability model is accurate. The cost allowance is illustrative, not a verified market fee. All Polymarket.com asks are from the international platform, NOT Polymarket US. Check eligibility, settlement rules, quote depth, and lineup/roster status independently. Missing injuries do not imply a healthy roster. The frozen prospective trackers are not modified.</p>
+</main><script src="/portfolio-core.js"></script><script src="/portfolio-ui.js"></script></body></html>

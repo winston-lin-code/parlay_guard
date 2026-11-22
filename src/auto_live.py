@@ -295,7 +295,10 @@ def eligible_props(shortlist_path,features_path,events,now):
               'ask':price,'stressed_ev_roi':round(ev,4),
               'model_probability':as_num(row.get('model_probability')),
               'market_url':str(row.get('market_url') or ''),
-              'top_ask_shares':as_num(row.get('ask_size_shares'))}
+              'top_ask_shares':as_num(row.get('ask_size_shares')),
+              'observed_utc':row['observed_utc'].isoformat(),
+              'game_start_utc':row['game_start_utc'].isoformat()}
+        # PARLAY_GUARD_SAME_GAME_COMPARISON_V1: timestamps retained for audit
         results.setdefault(slug,[]).append(item)
     return results
 
@@ -317,6 +320,8 @@ def assemble_data(events,win_forecasts,lines,history,metrics,props,quotes,now,er
             'market_spread':choose_market_line(event['markets'],'spreads'),
             'market_total':choose_market_line(event['markets'],'totals'),
             'moneylines':moneyline,'selected_props':chosen,
+            # PARLAY_GUARD_SAME_GAME_COMPARISON_V1
+            'same_game_prop_candidates':candidates,
             'selection_policy':'Only ranked, liquid positive-stress-EV props from the predicted winning team',
             'injury_status':'unverified'}
         games.append(gs)
@@ -368,5 +373,25 @@ def run_update(*,max_games=10,fetch_players=True,refresh_team=True):
         try:money=moneyline_quotes(session,events)
         except Exception as exc:
             warnings.append('Moneyline order books failed: '+str(exc)[:160]);money={}
-        return assemble_data(events,preds,models,hist,metrics,props,money,
-                             datetime.now(timezone.utc),warnings)
+        snapshot=assemble_data(events,preds,models,hist,metrics,props,money,
+                               datetime.now(timezone.utc),warnings)
+        # PARLAY_GUARD_JOINT_RESEARCH_V1
+        try:
+            from .joint_ev import build_joint_research
+            snapshot['joint_research']=build_joint_research(snapshot,ROOT)
+        except Exception as exc:
+            warnings.append('Joint probability research unavailable: '+str(exc)[:170])
+            snapshot['warnings']=warnings[-12:]
+            snapshot['joint_research']={'error':str(exc)[:170],'singles':[],'cross_game':[],'cross_game_line':[],'same_game':[]}
+        # PARLAY_GUARD_PAPER_TRACKING_V1
+        try:
+            from .paper_track_joint import capture_pregame_snapshots, settle_pending, performance_summary
+            new_slates = capture_pregame_snapshots(snapshot, ROOT)
+            settle_pending(ROOT)
+            snapshot['paper_tracking'] = performance_summary(ROOT)
+            snapshot['paper_tracking']['newly_captured'] = new_slates
+        except Exception as exc:
+            warnings.append('Paper tracker unavailable: '+str(exc)[:170])
+            snapshot['warnings'] = warnings[-12:]
+            snapshot['paper_tracking'] = {'error':str(exc)[:170], 'recorded_slates':0, 'strategies':[]}
+        return snapshot

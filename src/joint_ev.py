@@ -207,6 +207,37 @@ def _sigma(metrics, kind):
     return mae * math.sqrt(math.pi/2)
 
 
+# PARLAY_GUARD_LINE_CALIBRATION_V1
+
+def _calibrate_line(line, kind, artifact):
+    """Adjust marginal cover P using held-out synthetic-grid validation only.
+
+    The two-sided spread/total case must transform the common greater-than
+    event FIRST, then complement. All outputs remain NON-market-validated.
+    """
+    if line is None:
+        return None
+    from .calibrate_game_lines import calibrated_probability
+    original = float(line['model_probability'])
+    if kind == 'spread':
+        reverse = line.get('team_side') == 'AWAY'
+    else:
+        reverse = line['side'].startswith('UNDER ')
+    canonical = 1-original if reverse else original
+    calibrated, status = calibrated_probability(artifact, kind, canonical)
+    probability = 1-calibrated if reverse else calibrated
+    new_line = dict(line)
+    if kind == 'total' and probability < .5:
+        # The conditional most likely total side may flip under calibration.
+        before = new_line['side']
+        new_line['side'] = ('UNDER ' if before.startswith('OVER ') else 'OVER ') + str(new_line['market_line'])
+        new_line['direction'] = -int(new_line['direction'])
+        probability = 1-probability
+    new_line['model_probability']=round(probability,5)
+    new_line['probability_status']=status
+    new_line['market_line_validated']=False
+    return new_line
+
 def build_joint_research(snapshot: dict, root: Path) -> dict:
     """Compare currently selected prop singles, cross-game pairs, prop+lines.
 
@@ -221,10 +252,23 @@ def build_joint_research(snapshot: dict, root: Path) -> dict:
         'generated_at_utc': now.isoformat(),
         'status': 'research_only',
         'disclaimer': ('Illustrative joint probabilities only. Game-line cover probabilities approximate '
-                       '2025-26 holdout errors by a normal distribution and are NOT calibrated. '
+                       'a normal-error model; optional calibration is evaluated ONLY on synthetic thresholds. '
                        'Historical player/game correlations can change and exclude injuries. '
                        'Combined asks are NOT executable Polymarket Combo quotes. No executable parlay EV is claimed.'),
         'singles': [], 'cross_game': [], 'cross_game_line': [], 'same_game': [], 'warnings': [],
+    }
+    from .calibrate_game_lines import load_calibrator
+    calibrator = load_calibrator(root / 'models/game_line_calibration_v1.json')
+    targets = (calibrator or {}).get('targets', {})
+    payload['line_calibration'] = {
+        'status': ('synthetic_thresholds_evaluated' if calibrator and any(
+            v.get('use_for_research') for v in targets.values()) else 'not_validated'),
+        'market_line_validated': False,
+        'spread_gate': targets.get('home_margin', {}).get('use_for_research', False),
+        'total_gate': targets.get('total', {}).get('use_for_research', False),
+        'spread_test': targets.get('home_margin', {}).get('test_calibrated'),
+        'total_test': targets.get('total', {}).get('test_calibrated'),
+        'note': 'Historical evaluation used synthetic forecast-centered thresholds, not observed market lines. Live transfer is unverified.',
     }
     selected = []
     for game in games:
@@ -268,6 +312,14 @@ def build_joint_research(snapshot: dict, root: Path) -> dict:
     if all(v is None for v in sigmas.values()):
         payload['warnings'].append('No holdout MAE; cannot estimate game-line probability.')
         return payload
+    # Match the probability base sigma to the validation sigma from the
+    # stored calibrator; otherwise the map would act on an unchecked scale.
+    for kind, key in (('spread', 'home_margin'), ('total', 'total')):
+        target_cal = targets.get(key) or {}
+        if target_cal.get('use_for_research'):
+            candidate = _finite(target_cal.get('sigma_validation'))
+            if candidate is not None and 0 < candidate < 100:
+                sigmas[kind] = candidate
     # Cross-game prop+line pairs assume independence across two distinct games.
     # A real game-line ask is not available here, so ROI is intentionally NULL.
     for pick in selected:
@@ -275,7 +327,7 @@ def build_joint_research(snapshot: dict, root: Path) -> dict:
             if other['slug'] == pick['game']:
                 continue
             for kind in ('spread', 'total'):
-                line = _line_candidate(other, kind, sigmas[kind])
+                line = _calibrate_line(_line_candidate(other, kind, sigmas[kind]), kind, calibrator)
                 if line is None:
                     continue
                 p_joint = round(pick['stress_probability'] * line['model_probability'], 6)
@@ -284,7 +336,8 @@ def build_joint_research(snapshot: dict, root: Path) -> dict:
                     'line_game': other['slug'], 'player': pick['player'],
                     'prop': f"{pick['stat']} {pick['side']} {pick['line']}",
                     'game_line': line['side'], 'joint_probability': p_joint,
-                    'model': 'cross-game independence; game-line cover estimate uncalibrated',
+                    'model': 'cross-game independence; line estimate tested only on synthetic thresholds',
+                    'line_probability_status': line['probability_status'], 'market_line_validated': False,
                     'breakeven_combo_ask': p_joint, 'executable_combo_ask': None,
                     'executable_ev_roi': None,
                 })
@@ -323,7 +376,7 @@ def build_joint_research(snapshot: dict, root: Path) -> dict:
         if not game_picks:
             continue
         for kind in ('spread', 'total'):
-            line = _line_candidate(game, kind, sigmas[kind])
+            line = _calibrate_line(_line_candidate(game, kind, sigmas[kind]), kind, calibrator)
             if line is None:
                 continue
             for pick in game_picks:
@@ -350,10 +403,12 @@ def build_joint_research(snapshot: dict, root: Path) -> dict:
                     'player': pick['player'], 'prop': f"{pick['stat']} {pick['side']} {pick['line']}",
                     'game_line': line['side'], 'prop_probability_stressed': pick['stress_probability'],
                     'game_line_probability': line['model_probability'],
+                    'line_probability_status': line['probability_status'], 'market_line_validated': False,
                     'joint_probability': p_joint, 'joint_sensitivity_range': interval,
                     'correlation': corr, 'breakeven_combo_ask': p_joint,
                     'executable_combo_ask': None, 'executable_ev_roi': None,
-                    'status': 'ESTIMATED_UNCALIBRATED' if corr else 'INSUFFICIENT_CORRELATION_DATA',
+                    'status': ('ESTIMATED_SYNTHETIC_THRESHOLD_EVALUATED' if corr and line['probability_status'] == 'test_evaluated_synthetic_thresholds'
+                               else 'ESTIMATED_UNCALIBRATED' if corr else 'INSUFFICIENT_CORRELATION_DATA'),
                 })
     payload['same_game'].sort(key=lambda x: (x['joint_probability'] is not None, x['joint_probability'] or 0), reverse=True)
     payload['same_game'] = payload['same_game'][:20]

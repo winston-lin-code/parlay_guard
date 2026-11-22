@@ -53,7 +53,7 @@ def prepare_history(history: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise ValueError(f"Historical CSV missing columns: {sorted(missing)}")
     history = history.copy()
-    history["GAME_DATE"] = pd.to_datetime(history["GAME_DATE"], errors="coerce").dt.normalize()
+    history["GAME_DATE"] = pd.to_datetime(history["GAME_DATE"], format="mixed", errors="coerce").dt.normalize()
     history = history.dropna(subset=["GAME_DATE", "PLAYER_ID", "PLAYER_NAME"])
     for stat in ROLLING_STATS:
         history[stat] = pd.to_numeric(history[stat], errors="coerce")

@@ -49,6 +49,27 @@ class LiveState:
             try:
                 output=run_update(max_games=int(os.environ.get('PG_MAX_GAMES','10')),
                                   fetch_players=refresh_player,refresh_team=refresh_team)
+                # PARLAY_GUARD_MONEYLINE_PAPER_TRACKER_V1
+                # Prospective PAPER-ONLY capture, never a trade/real money order.
+                try:
+                    from .moneyline_paper_track import on_live_refresh
+                    output['moneyline_tracking'] = on_live_refresh(output, ROOT)
+                except Exception as paper_exc:
+                    output['moneyline_tracking'] = {'status': 'ERROR', 'paper_only': True,
+                                                    'error': f'{type(paper_exc).__name__}: {paper_exc}'[:350]}
+                    output.setdefault('warnings', []).append('Moneyline paper tracking: '+str(paper_exc)[:140])
+                # PARLAY_GUARD_SAME_GAME_COMPARISON_V1
+                # Side-by-side paper experiment, no trade placement.
+                try:
+                    from .same_game_paper_track import on_live_refresh as same_game_refresh
+                    output['same_game_comparison'] = same_game_refresh(output, ROOT)
+                except Exception as comparison_exc:
+                    output['same_game_comparison'] = {
+                        'status': 'ERROR', 'paper_only': True,
+                        'error': f'{type(comparison_exc).__name__}: {comparison_exc}'[:350],
+                    }
+                    output.setdefault('warnings', []).append(
+                        'Same-game paper comparison: '+str(comparison_exc)[:150])
                 # Only publish fully assembled snapshots. A failed upstream
                 # refresh never replaces the last usable results with partial CSVs.
                 with self.lock:
@@ -95,6 +116,16 @@ async def lifespan(app:FastAPI):
 app=FastAPI(title='Parlay Guard Auto Live',version='0.4',lifespan=lifespan)
 app.include_router(live_dashboard_router)
 
+
+# PARLAY_GUARD_COLLEGE_GUARD_V1
+from .college_api import router as college_guard_router
+app.include_router(college_guard_router)
+
+# PG_MULTI_SPORT_PORTFOLIO_V1
+from .portfolio_api import router as portfolio_router
+app.include_router(portfolio_router)
+
+
 @app.get('/',response_class=HTMLResponse)
 def dashboard():
     if not LIVE.exists():return HTMLResponse('<h1>Missing static/live.html</h1>',status_code=503)
@@ -122,6 +153,27 @@ def live_refresh():
     state.trigger()
     return {'queued':True,'message':'Background refresh requested. This endpoint places no trades.'}
 
+# PARLAY_GUARD_MARKET_LINE_AUDIT_V1
+@app.get('/api/market-line-validation')
+def market_line_validation_report():
+    """Local historical BOOKMAKER quote audit; separate from live Polymarket EV."""
+    import json
+    path=ROOT/'models/market_line_validation_v1.json'
+    if not path.exists():
+        return JSONResponse({'status':'no_historical_market_lines',
+            'message':'Import timestamped historical NBA spread/total offers and run validation. '
+                      'Synthetic-threshold calibration is not bookmaker calibration.'},
+            headers={'Cache-Control':'no-store'})
+    try:
+        data=json.loads(path.read_text(encoding='utf-8'))
+        if data.get('validation_scope')!='timestamped_historical_bookmaker_reference_lines':
+            raise ValueError('Unexpected audit schema')
+        return JSONResponse(data,headers={'Cache-Control':'no-store'})
+    except (OSError,ValueError,TypeError):
+        return JSONResponse({'status':'invalid_historical_audit',
+            'message':'Historical market-line audit is invalid; rerun the validator.'},
+            headers={'Cache-Control':'no-store'})
+
 @app.get('/api/health')
 def health():
     s=state.read()
@@ -141,3 +193,29 @@ def markets():
 def predictions():
     return {'games':[{'slug':g['slug'],'winner':g['winner_forecast'],
                       'lines':g['game_line_prediction'],'props':g['selected_props']} for g in state.read()['games']]}
+
+# PARLAY_GUARD_MONEYLINE_PAPER_TRACKER_V1 — read-only tracker routes
+@app.get('/api/moneyline-tracker')
+def moneyline_paper_tracker_report():
+    from .moneyline_paper_track import report
+    return report(ROOT)
+
+@app.get('/moneyline-tracker', response_class=HTMLResponse)
+def moneyline_paper_tracker_page():
+    page = ROOT / 'static/moneyline_tracker.html'
+    if not page.is_file():
+        raise HTTPException(503, 'Moneyline tracker page missing')
+    return FileResponse(page, media_type='text/html', headers={'Cache-Control': 'no-store'})
+
+# PARLAY_GUARD_SAME_GAME_COMPARISON_V1 — read-only comparison pages
+@app.get('/api/same-game-comparison')
+def same_game_comparison_report():
+    from .same_game_paper_track import report
+    return report(ROOT)
+
+@app.get('/same-game-comparison', response_class=HTMLResponse)
+def same_game_comparison_page():
+    page = ROOT / 'static/same_game_comparison.html'
+    if not page.is_file():
+        raise HTTPException(503, 'Comparison dashboard page missing')
+    return FileResponse(page, media_type='text/html', headers={'Cache-Control':'no-store'})

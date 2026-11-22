@@ -1,0 +1,476 @@
+{
+  "schema": 1,
+  "created_utc": "2026-11-20T20:17:02.996489+00:00",
+  "validation_scope": "free_consensus_closing_lines_without_quote_timestamps",
+  "has_verified_quote_publication_times": false,
+  "has_bookmaker_executable_prices": false,
+  "usable_for_prior_cutoff_ev_backtests": false,
+  "usable_for_live_probability_replacement": false,
+  "method": "Frozen Ridge trained before 2023-10-01; sigma from 2023-24 heldout games; isotonic fitted on 2024-25 closing-line outcomes; untouched 2025-26 test.",
+  "training_games": 1073,
+  "sigma_games": 1230,
+  "sigmas": {
+    "home_margin": 14.45672,
+    "total": 18.87546
+  },
+  "score_mismatched_quote_rows_rejected": 0,
+  "date_team_score_verified_games": 2448,
+  "targets": {
+    "spreads": {
+      "validation_game_count": 1223,
+      "test_game_count": 1224,
+      "test_push_count": 0,
+      "test_baseline": {
+        "n_games": 1224,
+        "brier": 0.272435,
+        "ece_10_bins": 0.130022,
+        "reliability_bins": [
+          {
+            "bin_start": 0.1,
+            "bin_end": 0.2,
+            "n_threshold_events": 13,
+            "mean_probability": 0.17403,
+            "observed_rate": 0.46154
+          },
+          {
+            "bin_start": 0.2,
+            "bin_end": 0.3,
+            "n_threshold_events": 88,
+            "mean_probability": 0.26239,
+            "observed_rate": 0.53409
+          },
+          {
+            "bin_start": 0.3,
+            "bin_end": 0.4,
+            "n_threshold_events": 223,
+            "mean_probability": 0.35638,
+            "observed_rate": 0.49327
+          },
+          {
+            "bin_start": 0.4,
+            "bin_end": 0.5,
+            "n_threshold_events": 281,
+            "mean_probability": 0.45045,
+            "observed_rate": 0.54804
+          },
+          {
+            "bin_start": 0.5,
+            "bin_end": 0.6,
+            "n_threshold_events": 268,
+            "mean_probability": 0.5508,
+            "observed_rate": 0.5
+          },
+          {
+            "bin_start": 0.6,
+            "bin_end": 0.7,
+            "n_threshold_events": 196,
+            "mean_probability": 0.64494,
+            "observed_rate": 0.51531
+          },
+          {
+            "bin_start": 0.7,
+            "bin_end": 0.8,
+            "n_threshold_events": 134,
+            "mean_probability": 0.73803,
+            "observed_rate": 0.53731
+          },
+          {
+            "bin_start": 0.8,
+            "bin_end": 0.9,
+            "n_threshold_events": 20,
+            "mean_probability": 0.83592,
+            "observed_rate": 0.5
+          },
+          {
+            "bin_start": 0.9,
+            "bin_end": 1.0,
+            "n_threshold_events": 1,
+            "mean_probability": 0.91177,
+            "observed_rate": 0.0
+          }
+        ]
+      },
+      "test_market_consensus_reference": {
+        "n_games": 1224,
+        "brier": 0.250321,
+        "ece_10_bins": 0.017987,
+        "reliability_bins": [
+          {
+            "bin_start": 0.4,
+            "bin_end": 0.5,
+            "n_threshold_events": 460,
+            "mean_probability": 0.4909,
+            "observed_rate": 0.53478
+          },
+          {
+            "bin_start": 0.5,
+            "bin_end": 0.6,
+            "n_threshold_events": 764,
+            "mean_probability": 0.50546,
+            "observed_rate": 0.50785
+          }
+        ]
+      },
+      "test_calibrated_on_support": {
+        "n_games": 1221,
+        "brier": 0.250126,
+        "ece_10_bins": 0.023186,
+        "reliability_bins": [
+          {
+            "bin_start": 0.0,
+            "bin_end": 0.1,
+            "n_threshold_events": 1,
+            "mean_probability": 0.0827,
+            "observed_rate": 0.0
+          },
+          {
+            "bin_start": 0.2,
+            "bin_end": 0.3,
+            "n_threshold_events": 2,
+            "mean_probability": 0.25164,
+            "observed_rate": 0.5
+          },
+          {
+            "bin_start": 0.4,
+            "bin_end": 0.5,
+            "n_threshold_events": 852,
+            "mean_probability": 0.48559,
+            "observed_rate": 0.51643
+          },
+          {
+            "bin_start": 0.5,
+            "bin_end": 0.6,
+            "n_threshold_events": 363,
+            "mean_probability": 0.52353,
+            "observed_rate": 0.52066
+          },
+          {
+            "bin_start": 0.6,
+            "bin_end": 0.7,
+            "n_threshold_events": 2,
+            "mean_probability": 0.65588,
+            "observed_rate": 0.5
+          },
+          {
+            "bin_start": 0.8,
+            "bin_end": 0.9,
+            "n_threshold_events": 1,
+            "mean_probability": 0.89842,
+            "observed_rate": 1.0
+          }
+        ]
+      },
+      "test_baseline_on_support": {
+        "n_games": 1221,
+        "brier": 0.271773,
+        "ece_10_bins": 0.128955,
+        "reliability_bins": [
+          {
+            "bin_start": 0.1,
+            "bin_end": 0.2,
+            "n_threshold_events": 12,
+            "mean_probability": 0.17897,
+            "observed_rate": 0.41667
+          },
+          {
+            "bin_start": 0.2,
+            "bin_end": 0.3,
+            "n_threshold_events": 88,
+            "mean_probability": 0.26239,
+            "observed_rate": 0.53409
+          },
+          {
+            "bin_start": 0.3,
+            "bin_end": 0.4,
+            "n_threshold_events": 223,
+            "mean_probability": 0.35638,
+            "observed_rate": 0.49327
+          },
+          {
+            "bin_start": 0.4,
+            "bin_end": 0.5,
+            "n_threshold_events": 281,
+            "mean_probability": 0.45045,
+            "observed_rate": 0.54804
+          },
+          {
+            "bin_start": 0.5,
+            "bin_end": 0.6,
+            "n_threshold_events": 268,
+            "mean_probability": 0.5508,
+            "observed_rate": 0.5
+          },
+          {
+            "bin_start": 0.6,
+            "bin_end": 0.7,
+            "n_threshold_events": 196,
+            "mean_probability": 0.64494,
+            "observed_rate": 0.51531
+          },
+          {
+            "bin_start": 0.7,
+            "bin_end": 0.8,
+            "n_threshold_events": 134,
+            "mean_probability": 0.73803,
+            "observed_rate": 0.53731
+          },
+          {
+            "bin_start": 0.8,
+            "bin_end": 0.9,
+            "n_threshold_events": 19,
+            "mean_probability": 0.83274,
+            "observed_rate": 0.47368
+          }
+        ]
+      },
+      "test_support_games": 1221,
+      "isotonic_knots": {
+        "x": [
+          0.13197046721789663,
+          0.18916166246463123,
+          0.5634775857984349,
+          0.5635987880399073,
+          0.5940302207367538,
+          0.5943493348929048,
+          0.6148268548497476,
+          0.6153069906088304,
+          0.7466994731107434,
+          0.7474423408504612,
+          0.8526216213339721,
+          0.8550213276772123,
+          0.8725310723973163,
+          0.8938546698391525
+        ],
+        "y": [
+          0.0,
+          0.4857916102841678,
+          0.4857916102841678,
+          0.4875,
+          0.4875,
+          0.5,
+          0.5,
+          0.525925925925926,
+          0.525925925925926,
+          0.5352112676056338,
+          0.5352112676056338,
+          0.6666666666666666,
+          0.6666666666666666,
+          1.0
+        ]
+      },
+      "benchmark_status": "retrospective_closing_line_evaluated"
+    },
+    "totals": {
+      "validation_game_count": 1223,
+      "test_game_count": 1224,
+      "test_push_count": 0,
+      "test_baseline": {
+        "n_games": 1224,
+        "brier": 0.264634,
+        "ece_10_bins": 0.102752,
+        "reliability_bins": [
+          {
+            "bin_start": 0.1,
+            "bin_end": 0.2,
+            "n_threshold_events": 1,
+            "mean_probability": 0.12385,
+            "observed_rate": 0.0
+          },
+          {
+            "bin_start": 0.2,
+            "bin_end": 0.3,
+            "n_threshold_events": 32,
+            "mean_probability": 0.26789,
+            "observed_rate": 0.5
+          },
+          {
+            "bin_start": 0.3,
+            "bin_end": 0.4,
+            "n_threshold_events": 220,
+            "mean_probability": 0.35874,
+            "observed_rate": 0.55
+          },
+          {
+            "bin_start": 0.4,
+            "bin_end": 0.5,
+            "n_threshold_events": 354,
+            "mean_probability": 0.45302,
+            "observed_rate": 0.46893
+          },
+          {
+            "bin_start": 0.5,
+            "bin_end": 0.6,
+            "n_threshold_events": 337,
+            "mean_probability": 0.54665,
+            "observed_rate": 0.46588
+          },
+          {
+            "bin_start": 0.6,
+            "bin_end": 0.7,
+            "n_threshold_events": 208,
+            "mean_probability": 0.63963,
+            "observed_rate": 0.51442
+          },
+          {
+            "bin_start": 0.7,
+            "bin_end": 0.8,
+            "n_threshold_events": 61,
+            "mean_probability": 0.74059,
+            "observed_rate": 0.5082
+          },
+          {
+            "bin_start": 0.8,
+            "bin_end": 0.9,
+            "n_threshold_events": 11,
+            "mean_probability": 0.82469,
+            "observed_rate": 0.54545
+          }
+        ]
+      },
+      "test_market_consensus_reference": {
+        "n_games": 1224,
+        "brier": 0.249867,
+        "ece_10_bins": 0.008433,
+        "reliability_bins": [
+          {
+            "bin_start": 0.4,
+            "bin_end": 0.5,
+            "n_threshold_events": 343,
+            "mean_probability": 0.49392,
+            "observed_rate": 0.46647
+          },
+          {
+            "bin_start": 0.5,
+            "bin_end": 0.6,
+            "n_threshold_events": 881,
+            "mean_probability": 0.50294,
+            "observed_rate": 0.50397
+          }
+        ]
+      },
+      "test_calibrated_on_support": {
+        "n_games": 1222,
+        "brier": 0.251711,
+        "ece_10_bins": 0.04532,
+        "reliability_bins": [
+          {
+            "bin_start": 0.3,
+            "bin_end": 0.4,
+            "n_threshold_events": 2,
+            "mean_probability": 0.37601,
+            "observed_rate": 0.0
+          },
+          {
+            "bin_start": 0.4,
+            "bin_end": 0.5,
+            "n_threshold_events": 48,
+            "mean_probability": 0.4646,
+            "observed_rate": 0.58333
+          },
+          {
+            "bin_start": 0.5,
+            "bin_end": 0.6,
+            "n_threshold_events": 1172,
+            "mean_probability": 0.53322,
+            "observed_rate": 0.49147
+          }
+        ]
+      },
+      "test_baseline_on_support": {
+        "n_games": 1222,
+        "brier": 0.264401,
+        "ece_10_bins": 0.102087,
+        "reliability_bins": [
+          {
+            "bin_start": 0.2,
+            "bin_end": 0.3,
+            "n_threshold_events": 32,
+            "mean_probability": 0.26789,
+            "observed_rate": 0.5
+          },
+          {
+            "bin_start": 0.3,
+            "bin_end": 0.4,
+            "n_threshold_events": 220,
+            "mean_probability": 0.35874,
+            "observed_rate": 0.55
+          },
+          {
+            "bin_start": 0.4,
+            "bin_end": 0.5,
+            "n_threshold_events": 354,
+            "mean_probability": 0.45302,
+            "observed_rate": 0.46893
+          },
+          {
+            "bin_start": 0.5,
+            "bin_end": 0.6,
+            "n_threshold_events": 337,
+            "mean_probability": 0.54665,
+            "observed_rate": 0.46588
+          },
+          {
+            "bin_start": 0.6,
+            "bin_end": 0.7,
+            "n_threshold_events": 208,
+            "mean_probability": 0.63963,
+            "observed_rate": 0.51442
+          },
+          {
+            "bin_start": 0.7,
+            "bin_end": 0.8,
+            "n_threshold_events": 61,
+            "mean_probability": 0.74059,
+            "observed_rate": 0.5082
+          },
+          {
+            "bin_start": 0.8,
+            "bin_end": 0.9,
+            "n_threshold_events": 10,
+            "mean_probability": 0.81774,
+            "observed_rate": 0.6
+          }
+        ]
+      },
+      "test_support_games": 1222,
+      "isotonic_knots": {
+        "x": [
+          0.16608958764396792,
+          0.22238675646823558,
+          0.22516299339214713,
+          0.3153742205175954,
+          0.3155506977065734,
+          0.8649194639807287
+        ],
+        "y": [
+          0.375,
+          0.375,
+          0.4647887323943662,
+          0.4647887323943662,
+          0.5332167832167832,
+          0.5332167832167832
+        ]
+      },
+      "benchmark_status": "retrospective_closing_line_evaluated"
+    }
+  },
+  "notice": "Comparison uses closing consensus lines assembled retrospectively. The quote capture times are unknown, so closing lines cannot support claims about prices available earlier, executable ROI or Polymarket pricing. Market consensus probability is a no-vig reference, not an offered price. Push games excluded from Brier and ECE.",
+  "datasets": {
+    "2024-25": {
+      "source_url": "https://huggingface.co/datasets/minmaxxxer/nba-closing-lines-ats-2024-25/resolve/main/nba_2024_25_closing_lines_ats.csv",
+      "sha256": "e756b4c09c3ac56070f95ad8b6de78fc1b95a1df1049825a5f329d7ce57968cc",
+      "source_rows": 1314,
+      "regular_rows": 1224,
+      "accepted_rows": 1224,
+      "ambiguous_duplicate_rows": 0
+    },
+    "2025-26": {
+      "source_url": "https://huggingface.co/datasets/minmaxxxer/nba-closing-lines-ats-2025-26/resolve/main/nba_2025_26_closing_lines_ats.csv",
+      "sha256": "9ff4950cd96dc97da58dd64632444e5865d39f1e02a0673533a924f895d1ecae",
+      "source_rows": 1315,
+      "regular_rows": 1224,
+      "accepted_rows": 1224,
+      "ambiguous_duplicate_rows": 0
+    }
+  }
+}

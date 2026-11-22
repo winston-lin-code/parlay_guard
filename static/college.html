@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>College Moneylines | Parlay Guard</title>
+<style>
+:root{color-scheme:dark;--bg:#090f1b;--panel:#15243a;--soft:#203450;--edge:#304765;--text:#f2f6ff;--sub:#adbed5;--green:#7de8b7;--gold:#f9d38b;--red:#ffb7b7}
+*{box-sizing:border-box}body{background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,'Segoe UI',sans-serif;margin:0}
+main{max-width:1390px;margin:auto;padding:26px 22px 60px}a{color:#b8dcff;text-decoration:none}a:hover{text-decoration:underline}
+nav{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}h1{margin:8px 0 4px;font-size:30px}h2{margin:10px 0;font-size:20px}h3{font-size:15px;margin:0}p{margin:6px 0}.sub{color:var(--sub)}.eyebrow{color:var(--green);font-size:11px;letter-spacing:.12em;text-transform:uppercase;font-weight:800}
+button,select,input{color:var(--text);background:var(--soft);border:1px solid var(--edge);padding:10px;border-radius:9px;font:inherit}button{cursor:pointer}button:hover{border-color:var(--green)}
+.controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:20px 0}label{display:flex;gap:8px;align-items:center}
+.banner{padding:13px 15px;background:var(--panel);border:1px solid var(--edge);border-radius:12px;margin:18px 0}.caption{font-size:12px;color:var(--sub)}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.stat{padding:13px 15px;border:1px solid var(--edge);background:var(--panel);border-radius:12px}.stat strong{display:block;font-size:23px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px;margin-top:16px}.card{background:var(--panel);border:1px solid var(--edge);padding:16px;border-radius:15px;min-width:0}
+.card.good{border-color:#377857}.head{display:flex;justify-content:space-between;align-items:start;gap:10px}.pill{font-size:11px;border:1px solid var(--edge);border-radius:20px;padding:3px 8px;white-space:nowrap}.pill.good{color:var(--green);border-color:#4c8668}.pill.review{color:var(--gold)}
+.matchup{display:flex;align-items:center;gap:10px;margin-top:12px}.team{flex:1;display:flex;align-items:center;gap:8px;min-width:0}.team img{height:45px;width:45px;object-fit:contain;flex-shrink:0}.team span{font-weight:700;line-height:1.25}.vs{color:var(--sub)}
+.values{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:14px}.value{background:var(--soft);padding:11px;border-radius:10px}.value small{display:block;color:var(--sub)}.value b{font-size:16px}.green{color:var(--green)}.red{color:var(--red)}.gold{color:var(--gold)}
+.alert{border-top:1px solid var(--edge);margin-top:13px;padding-top:12px}.alert .tag{font-size:11px;font-weight:700}.alert ul{margin:5px 0 8px;padding-left:18px}.alert li{margin:2px 0}.misc{margin-top:12px;color:var(--sub);font-size:12px}
+@media(max-width:860px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}}@media(max-width:460px){main{padding:16px 10px}.team img{width:32px;height:32px}.team{font-size:12px}.values{grid-template-columns:1fr}}
+</style></head><body><main>
+<nav><div><div class="eyebrow">Parlay Guard · independent college models</div><h1>College moneyline EV</h1><p class="sub">Men's college basketball (D-I) and FBS football · read-only research</p></div><a href="/">← NBA Dashboard</a></nav>
+<div class="banner" id="status">Loading college schedules, live Polymarket best asks and roster evidence…</div>
+<div class="controls">
+<label>Game day <select id="day"><option value="0">Today</option><option value="1">Tomorrow</option><option value="2">In two days</option></select></label>
+<label>Sport <select id="sport"><option value="all">Both college sports</option><option value="mbb">College basketball</option><option value="cfb">College football</option></select></label>
+<label><input id="positive" type="checkbox"> Positive estimated EV only</label>
+<button id="reload">Refresh prices and status</button>
+</div>
+<div class="stats"><div class="stat"><span class="caption">Upcoming games</span><strong id="gamesCount">—</strong></div><div class="stat"><span class="caption">Quoted games</span><strong id="quotedCount">—</strong></div><div class="stat"><span class="caption">Estimated EV ≥5%</span><strong id="edgeCount">—</strong></div><div class="stat"><span class="caption">Injury / roster reviews</span><strong id="alertsCount">—</strong></div></div>
+<div id="modelHealth" class="banner caption"></div><div id="cards" class="grid"></div>
+<div class="banner caption" id="warnings"></div>
+<p class="caption">EV = model probability ÷ (observed YES ask + 1¢ illustrative fee buffer) − 1. The buffer is a configurable allowance, not a verified fee quote. Quotes are from Polymarket.com, not Polymarket US; this app does not execute orders. Positive estimated EV is not verified profitability. College injury lists may be missing or late; a missing report is not evidence of a healthy roster. Models use only historical team form and ratings—injuries are NOT incorporated into predicted win probabilities.</p>
+</main><script>
+const $=id=>document.getElementById(id),make=(tag,cls,text)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e}, pct=x=>x==null?'—':(x*100).toFixed(1)+'%',money=x=>x==null?'—':(x*100).toFixed(1)+'¢';
+let last={games:[],sports:{}},busy=false;
+function teamNode(t){const e=make('div','team');if(t.logo&&t.logo.startsWith('https://a.espncdn.com/')){const img=make('img');img.src=t.logo;img.alt=t.display_name+' logo';img.loading='lazy';e.append(img)}e.append(make('span','',t.display_name));return e}
+function metric(name,value,cls=''){const d=make('div','value'),sm=make('small','',name),v=make('b',cls,value);d.append(sm,v);return d}
+function sideStatus(report,teamName){const a=make('div','alert'),warning=[];if(report.injuries?.length)warning.push('Reported issues');if(report.roster_changes?.length)warning.push('Roster listing changed');a.append(make('div','tag '+(warning.length?'gold':'sub'),teamName+' · '+(warning.join(' / ')||'No verified all-clear')));
+if(report.injuries?.length){const u=make('ul');for(const p of report.injuries){const li=make('li','',p.player+' — '+p.status+' · '+p.source+(p.reported_date?' ('+p.reported_date+')':''));u.append(li)}a.append(u)}
+if(report.roster_changes?.length){const u=make('ul');for(const p of report.roster_changes){u.append(make('li','',p.player+' — '+p.change))}a.append(u)}
+a.append(make('div','caption','Injury feed: '+String(report.injury_status||'not checked').replaceAll('_',' ')+' · Roster list: '+String(report.roster_status||'not checked').replaceAll('_',' ')));
+if(report.source_url?.startsWith('https://site.api.espn.com/')){const link=make('a','caption','ESPN injury feed');link.href=report.source_url;link.target='_blank';link.rel='noopener noreferrer';a.append(link)}
+return a}
+function card(g){const c=make('article','card'),hasEdge=!!g.best_pick;c.classList.toggle('good',hasEdge);const head=make('div','head');const name=make('div');name.append(make('h3','',g.sport==='mbb'?"Men's college basketball":'College football'));
+const when=new Date(g.start_utc);name.append(make('div','caption',when.toLocaleString([], {weekday:'short',hour:'numeric',minute:'2-digit',month:'short',day:'numeric'})));
+const s=make('span','pill '+(g.status.startsWith('POSITIVE')?'good':g.status==='ROSTER_INJURY_REVIEW'?'review':''),g.status.replaceAll('_',' '));head.append(name,s);c.append(head);
+const matchup=make('div','matchup');matchup.append(teamNode(g.away),make('span','vs','@'),teamNode(g.home));c.append(matchup);
+const vals=make('div','values');for(const side of ['away','home']){
+const t=g[side],p=g.predictions?.[side],q=g.market?.[side];vals.append(metric(t.short_name+' model win chance',pct(p)));
+vals.append(metric(t.short_name+' best YES ask',money(q?.ask)));
+if(q){vals.append(metric(t.short_name+' model-estimated EV',pct(q.estimated_ev),q.estimated_ev>=.05?'green':q.estimated_ev<0?'red':''));
+vals.append(metric(t.short_name+' liquidity at best ask',q.shares.toFixed(1)+' shares'))}
+}
+c.append(vals);
+if(g.best_pick){c.append(make('p',g.status==='ROSTER_INJURY_REVIEW'?'gold':'green','Top estimated edge: '+g.best_pick.team_name+' · '+pct(g.best_pick.estimated_ev)+' · '+money(g.best_pick.ask)+' best ask'))}
+else if(!Object.keys(g.market||{}).length)c.append(make('p','caption','No safely matched two-sided moneyline book for this game.'));else c.append(make('p','caption','No qualifying edge at the currently observed asks.'));
+for(const side of ['away','home'])c.append(sideStatus(g.injuries?.[side]||{},g[side].display_name));
+c.append(make('div','misc','ESPN event '+g.espn_id+' · neutral court/field: '+(g.neutral?'yes':'no')+' · model season '+g.season));return c}
+function render(){const sport=$('sport').value,positive=$('positive').checked;const gs=(last.games||[]).filter(g=>(sport==='all'||g.sport===sport)&&(!positive||g.best_pick));
+$('gamesCount').textContent=gs.length;$('quotedCount').textContent=gs.filter(g=>Object.keys(g.market||{}).length).length;
+$('edgeCount').textContent=gs.filter(g=>g.best_pick).length;$('alertsCount').textContent=gs.filter(g=>g.status==='ROSTER_INJURY_REVIEW').length;
+const root=$('cards');root.replaceChildren();if(!gs.length)root.append(make('div','banner','No games match these filters, or no valid live prices are currently available.'));for(const g of gs)root.append(card(g));
+const health=$('modelHealth');health.replaceChildren();for(const [s,m] of Object.entries(last.sports||{})){const label=m.label+' · '+(m.trained?('TRAINED · holdout Brier '+m.model_metrics?.brier+' vs constant baseline '+m.model_metrics?.baseline_brier+' · '+m.model_metrics?.holdout_games+' test games · latest training result '+(m.last_game_utc||'unavailable')):'NOT TRAINED · run '+m.training_command);health.append(make('p','',label))}
+const ws=$('warnings');ws.replaceChildren();(last.warnings||[]).forEach(w=>ws.append(make('p','gold',w)));if(!(last.warnings||[]).length)ws.append(make('span','','Last successfully fetched: '+(last.asof_utc||'unknown')))}
+async function load(){if(busy)return;busy=true;$('status').textContent='Scanning schedules, moneylines and injury/roster evidence…';try{const r=await fetch('/api/college/live?date_offset='+$('day').value,{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);last=await r.json();render();$('status').textContent='Research snapshot for '+last.date+' · captured '+new Date(last.asof_utc).toLocaleString()+' · automatic server cache: 10 minutes'}catch(e){$('status').textContent='Could not fetch college prices: '+e.message}finally{busy=false}}
+$('day').onchange=load;$('sport').onchange=render;$('positive').onchange=render;$('reload').onclick=async()=>{try{await fetch('/api/college/refresh',{method:'POST'})}catch(e){}load()};load();setInterval(load,60000);
+</script></body></html>

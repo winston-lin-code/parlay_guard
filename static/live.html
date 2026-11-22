@@ -13,16 +13,92 @@ main{max-width:1330px;margin:0 auto;padding:32px 22px 70px}.brand{font-weight:80
 .cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.head{display:flex;gap:12px;justify-content:space-between;align-items:start;flex-wrap:wrap}.winner{display:flex;gap:10px;align-items:center;margin-top:12px}.winner b{font-size:18px}.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:14px}.metric{background:var(--soft);padding:10px;border-radius:9px}.metric b{font-size:16px;display:block;margin-top:3px}.props{border-top:1px solid var(--line);padding-top:13px;margin-top:16px}.prop{display:flex;gap:9px;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #243855}.prop:last-child{border:0}.prop strong{font-size:13px}.prop small{display:block}.prop .value{text-align:right;white-space:nowrap}
 .strategies{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.strategy .big{font-size:22px;font-weight:800}.ticket{padding:12px;margin-top:8px;background:var(--soft);font-size:12px}.tickets{max-height:360px;overflow:auto}.controls{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:13px 0}.controls label{display:flex;align-items:center;gap:8px}.small{font-size:12px}.foot{margin-top:30px;font-size:12px;color:var(--muted)}.sep{height:1px;background:var(--line);margin:13px 0}
 @media(max-width:1120px){.strategies{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:820px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}.cards{grid-template-columns:1fr}}@media(max-width:600px){.strategies{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}main{padding:20px 12px}}
+/* PARLAY_GUARD_BANKROLL_ALLOCATOR_V1 */
+.pg-matchup{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+.pg-team{display:flex;align-items:center;gap:9px;min-width:155px;flex:1}
+.pg-team-label{display:flex;flex-direction:column;line-height:1.25}
+.pg-team-label small{font-size:12px}.pg-team-label strong{font-size:17px;letter-spacing:-.2px}
+.pg-at{font-weight:800;color:var(--muted);font-size:18px}
+.pg-logo{width:52px;height:52px;display:grid;place-items:center;flex:none;background:rgba(255,255,255,.07);border:1px solid var(--line);border-radius:13px;overflow:hidden}
+.pg-logo-image{max-width:45px;max-height:45px;object-fit:contain}
+.pg-logo-fallback{font-size:11px;font-weight:800}
+.pg-planner{border:1px solid var(--line);border-radius:16px;background:var(--panel);padding:22px}
+.pg-planner .pg-sub{color:var(--muted);margin:0 0 15px}
+.pg-budget-controls{display:flex;flex-wrap:wrap;align-items:end;gap:12px}
+.pg-budget-controls label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--muted);font-weight:700}
+.pg-budget-controls input{width:145px;max-width:100%;font-weight:700;font-size:18px}
+.pg-budget-controls select{min-width:140px}
+.pg-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:18px 0}
+.pg-sum{background:var(--soft);border-radius:10px;padding:12px}
+.pg-sum small{display:block;color:var(--muted);font-size:11px}
+.pg-sum strong{display:block;font-size:20px;margin-top:4px}
+.pg-plan-row{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px 0;border-top:1px solid var(--line)}
+.pg-plan-team,.pg-plan-numbers{display:flex;flex-direction:column}.pg-plan-numbers{text-align:right}
+.pg-plan-row small{font-size:12px}.pg-plan-numbers strong{font-size:18px}
+.pg-recommendation{background:rgba(117,232,179,.045);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:12px}
+.pg-reco-head{display:flex;align-items:center;justify-content:space-between;gap:9px}.pg-reco-head strong{font-size:18px}
+.pg-recommendation small{display:block;margin-top:4px}
+.pg-risk-note{font-size:12px;color:var(--muted);margin:14px 0 0}
+@media(max-width:820px){.pg-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.pg-team{min-width:118px}.pg-logo{width:42px;height:42px}.pg-logo-image{width:38px;height:38px}.pg-team-label strong{font-size:15px}}
+@media(max-width:430px){.pg-team{min-width:98px;gap:5px}.pg-at{font-size:14px}.pg-logo{width:35px;height:35px}.pg-logo-image{width:32px;height:32px}.pg-team-label strong{font-size:13px}.pg-plan-team small{font-size:11px}}
+
 </style>
 </head>
 <body><main>
 <header><div><div class="eyebrow">NBA · Read-only research</div><div class="brand">Parlay Guard <span class="muted">/ Live</span></div><p class="sub muted">Automatic winner picks · live prop market screening · projected spreads &amp; totals</p></div><div class="toolbar"><a href="/archive">Archived report</a><button id="refresh">Refresh data now</button></div></header>
+<a data-pg-portfolio-link="1" href="/portfolio" style="display:inline-block;margin:10px 6px;padding:8px 14px;border:1px solid #3e8168;border-radius:9px;color:#9effcb;text-decoration:none;font-weight:700">Multi-Sport EV Portfolio</a>
+
+<section id="college-overview" style="border:1px solid #345072;border-radius:13px;padding:16px;margin-top:18px;background:#15243a">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+    <div><strong style="font-size:20px">College basketball &amp; football moneylines</strong>
+      <p style="color:#a4b4cd">Separate trained models · live moneyline EV · injuries and roster changes</p></div>
+    <a href="/college">Open college game cards and EV →</a>
+  </div>
+  <div id="college-overview-content" style="font-size:13px;color:#adbed5">Loading college data…</div>
+</section>
 <div class="bar"><span id="state">Connecting to local prediction service…</span><span class="pill" id="stamp">No snapshot</span></div>
 <div class="summary"><div class="tile"><small>Upcoming games</small><strong id="gamecount">—</strong></div><div class="tile"><small>Model winners</small><strong id="winnercount">—</strong></div><div class="tile"><small>Winner-team props</small><strong id="propcount">—</strong></div><div class="tile"><small>Live-priced moneylines</small><strong id="mlcount">—</strong></div></div>
 <section><div class="head"><h2>Current game predictions</h2><span class="muted small">No manual team selection · old November 18 cards are not loaded</span></div><div class="cards" id="games"></div></section>
+<section id="pg-moneyline-planner" class="pg-planner" aria-label="Today's moneyline bankroll allocation">
+<div class="head"><div><div class="eyebrow">Moneyline singles · Research preview</div><h2>Today’s bankroll allocation</h2><p class="pg-sub">Enter your starting bankroll. Only positive model-EV picks receive a suggested paper stake; the rest stay at $0. No bets are placed.</p></div><span class="pill" id="pg-day">Today</span></div>
+<div class="pg-budget-controls">
+<label>Starting bankroll ($)<input id="pg-bankroll" type="number" value="100" min="1" max="10000000" step="10" inputmode="decimal"></label>
+<label>Already committed today ($)<input id="pg-committed" type="number" value="0" min="0" step="0.01" inputmode="decimal"></label>
+<label>Max risk today<select id="pg-daily-pct"><option value="0.02">2% of bankroll</option><option value="0.05" selected>5% of bankroll</option><option value="0.10">10% of bankroll</option></select></label>
+<label>Max risk per game<select id="pg-game-pct"><option value="0.01">1% of bankroll</option><option value="0.02" selected>2% of bankroll</option></select></label>
+<label>Minimum estimated EV<select id="pg-min-ev"><option value="0">Above 0%</option><option value="0.05" selected>At least 5%</option><option value="0.10">At least 10%</option></select></label>
+</div>
+<div class="pg-summary"><div class="pg-sum"><small>Daily risk ceiling</small><strong id="pg-cap">—</strong></div><div class="pg-sum"><small>Already committed</small><strong id="pg-committed-total">—</strong></div><div class="pg-sum"><small>New paper allocation</small><strong id="pg-total">—</strong></div><div class="pg-sum"><small>Remaining risk allowance</small><strong id="pg-left">—</strong></div><div class="pg-sum"><small>Funded / today’s games</small><strong id="pg-count">—</strong></div></div>
+<div id="pg-moneyline-results" aria-live="polite"></div>
+<p class="pg-risk-note">Sizing: quarter-Kelly from Elo probability and observed best ask, limited by the per-game cap, daily cap and displayed top-of-book shares. Quotes can move and fills are not assured. EV estimates are unvalidated and can be wrong. Enter stakes already committed today to avoid double-counting the daily cap after earlier games disappear from the live page. Unused bankroll is deliberately not forced into negative-edge bets. No orders are submitted; changing these controls does not modify frozen experiments.</p>
+</section>
 <section><h2>Strategy comparison</h2><p class="muted">The same screened player props are used for singles, same-game, and cross-game ticket examples. Moneylines use the model's winner for each game. Equal total stake across strategies.</p>
 <div class="controls"><label>Budget <span>$</span><input id="budget" type="number" min="1" max="500" step="5" value="20"></label><label>Illustrate a game failing <select id="failure"><option value="">None — all selected legs win</option></select></label></div>
 <div class="strategies" id="strategies"></div><p class="small muted">Combined prop odds are arithmetic products of single-contract prices, NOT executable Polymarket Combo prices. Same-game correlations, fees and fill depth are unmodeled. Shown payouts are scenarios, not forecasts of profitability.</p></section>
+<!-- PARLAY_GUARD_JOINT_RESEARCH_V1 -->
+<section id="joint-lab"><h2>Joint probability lab · research only</h2>
+<p class="muted">Singles, independent cross-game prop pairs, and same-game player prop + spread/total pairs.
+Combined market prices are not verified. Estimates do not establish profitable bets.</p>
+<div class="strategies" id="joint-research"><div class="note">Waiting for research snapshot…</div></div>
+<p class="small muted">Historical same-game correlations are shrunken estimates, not proof of a future relationship.
+Line probabilities are evaluated on synthetic historical thresholds, not real market-line quotes. Executable Combo EV is unavailable until an actual combo quote is verified.</p>
+</section>
+
+<!-- PARLAY_GUARD_PAPER_TRACKING_V1 -->
+<section id="paper-tracking">
+<h2>Paper strategy outcomes · longitudinal research</h2>
+<p class="muted">One immutable pre-tipoff slate per NBA date. Completed game and player records settle each ticket only when verified; partial and unverified outcomes remain pending. No real orders or fills.</p>
+<div class="strategies" id="paper-results"><div class="note">Awaiting paper-trading records…</div></div>
+<p class="small muted">Single reference returns assume top-ask fills that were NOT confirmed. Cross-game prop returns use synthetic products that are NOT executable Combo quotes. Same-game and prop+line pairs have hit rates only because actual Combo prices are missing. These figures are not trading profit.</p>
+</section>
+
+<!-- PARLAY_GUARD_MARKET_LINE_AUDIT_V1 -->
+<section id="market-line-audit">
+<h2>Historical market-line audit</h2>
+<p class="muted">Observed pregame bookmaker spreads and totals, one fixed book and a chronological test period. This is separate from Polymarket executable prices.</p>
+<div class="note" id="market-audit-summary">No real historical market-line audit loaded yet.</div>
+</section>
+
 <section><h2>Data health</h2><div class="note" id="health">Waiting for first data refresh…</div></section>
 <p class="foot">This tool never places bets. Game-win probabilities come from your frozen Elo model. Spread and total estimates come from a separate historical regression with a 2025–26 holdout. Player-prop EV is exploratory and conditional on model assumptions; player availability is unverified. Markets and models are refreshed on separate schedules while Uvicorn runs.</p>
 </main>
@@ -95,6 +171,97 @@ function renderStrategies(){
     panel.append(ticketList);root.append(panel);
   }
 }
+// PARLAY_GUARD_JOINT_RESEARCH_V1
+function renderJointResearch(){
+  const root=$('joint-research');if(!root)return;root.replaceChildren();
+  // PARLAY_GUARD_LINE_CALIBRATION_V1
+  const d=lastData.joint_research;
+  if(!d){root.append(el('div','note','Joint research has not been calculated for this snapshot.'));return;}
+  if(d.error){root.append(el('div','notice small','Joint analysis unavailable: '+d.error));return;}
+  const cal=d?.line_calibration;
+  if(cal){
+    const overview=el('div','note small',
+      'Line calibration: '+cal.status+' · spread gate '+(cal.spread_gate?'PASS':'NOT VALIDATED')+
+      ' · total gate '+(cal.total_gate?'PASS':'NOT VALIDATED')+
+      '. Synthetic-threshold evaluation only; actual market-line calibration and fills unverified.');
+    root.append(overview);
+  }
+  const items=[
+    ['Singles · stressed estimates',d.singles||[]],
+    ['Cross-game props · independence',d.cross_game||[]],
+    ['Cross-game prop + line',d.cross_game_line||[]],
+    ['Same-game prop + line',d.same_game||[]]
+  ];
+  for(let i=0;i<items.length;i++){
+    const [name, rows]=items[i],card=el('div','strategy');card.append(el('h3','',name));
+    if(!rows.length){card.append(el('p','muted small','No eligible research candidates.'));root.append(card);continue;}
+    const shown=i===0?[...rows].sort((a,b)=>(b.stressed_single_roi??-99)-(a.stressed_single_roi??-99)).slice(0,6):rows.slice(0,6);
+    for(const r of shown){
+      const item=el('div','ticket');
+      if(i===0){
+        item.append(el('b','',r.player+' · '+r.stat+' '+r.side+' '+r.line),
+          el('div','muted','Stressed P '+pct(r.stress_probability)+' · ask '+usd(r.individual_ask)+'/share'),
+          el('div','gold','Modeled stressed single ROI '+pct(r.stressed_single_roi)+' · unverified'));
+      }else if(i===1){
+        const first=r.legs?.[0],second=r.legs?.[1];
+        item.append(el('b','',(first?.player||'?')+' × '+(second?.player||'?')),
+          el('div','muted','Independence joint P '+pct(r.joint_probability)),
+          el('div','gold','Synthetic product price '+usd(r.hypothetical_product_ask)+' · NOT executable'),
+          el('div','muted','Executable parlay EV: unavailable'));
+      }else if(i===2){
+        item.append(el('b','',r.player+' '+r.prop+' × '+r.game_line),
+          el('div','muted','Different games · joint P '+pct(r.joint_probability)),
+          el('div','gold','Line P: '+(r.line_probability_status||'uncalibrated')+' · quote unavailable'),
+          el('div','muted','Executable parlay EV: unavailable'));
+      }else{
+        const sample=r.correlation?.n;
+        item.append(el('b','',r.player+' '+r.prop+' × '+r.game_line),
+          el('div','muted','Joint P '+pct(r.joint_probability)+' · line P '+pct(r.game_line_probability)),
+          el('div','muted',sample?'Historical paired games: '+sample+' · shrunken correlation '+r.correlation.shrunk_rho:'Not enough verified historical pairs'),
+          el('div','gold','Line P: '+(r.line_probability_status||'uncalibrated')+' · executable parlay EV unavailable'));
+      }
+      card.append(item);
+    }
+    root.append(card);
+  }
+  if((d.warnings||[]).length){const warn=el('div','note');for(const w of d.warnings)warn.append(el('p','small',w));root.append(warn);}
+}
+
+// PARLAY_GUARD_PAPER_TRACKING_V1
+function renderPaperTracking(){
+  const root=$('paper-results');if(!root)return;root.replaceChildren();
+  const report=lastData.paper_tracking;
+  if(!report){root.append(el('div','note','No paper tracker output yet. A new slate is recorded only when eligible pregame props and player IDs are available.'));return;}
+  if(report.error){root.append(el('div','notice','Paper tracking unavailable: '+report.error));return;}
+  const names={single_prop:'Single props',cross_game_props:'Cross-game prop pairs',
+    same_game_prop_line:'Same-game prop + line',cross_game_prop_line:'Cross-game prop + line'};
+  const header=el('div','note',String(report.recorded_slates||0)+' immutable pre-tipoff slate(s) recorded. '+
+    ((report.newly_captured||[]).length?'New captures: '+report.newly_captured.join(', ')+'. ':'')+
+    'Results update as complete NBA team and player records become available.');
+  root.append(header);
+  for(const row of report.strategies||[]){
+    const card=el('div','strategy');card.append(el('h3','',names[row.strategy]||row.strategy));
+    card.append(el('div','muted small','Tickets '+row.tickets+' · resolved '+(row.wins+row.losses)+
+      ' · pending '+row.pending+' · pushes '+row.pushes));
+    card.append(el('div','big',row.hit_rate==null?'—':pct(row.hit_rate)));
+    card.append(el('div','muted small','Verified ticket hit rate · '+row.fully_settled_slates+
+      ' fully resolved slate(s)'));
+    card.append(el('div','sep'));
+    if(row.mean_paper_reference_roi==null){
+      card.append(el('div','muted small','Paper reference ROI: unavailable'));
+    }else{
+      const label=row.strategy==='cross_game_props'?'Synthetic return, NOT executable':'Paper top-ask scenario return, NO fills';
+      const roi=el('div','gold','Equal-budget mean reference ROI '+pct(row.mean_paper_reference_roi));
+      card.append(roi,el('div','muted small',label));
+    }
+    card.append(el('div','muted small','Mean Brier score (uncalibrated): '+
+      (row.mean_brier==null?'—':Number(row.mean_brier).toFixed(3))));
+    root.append(card);
+  }
+  if((report.pending_dates||[]).length){root.append(el('div','note',
+    'Slates with unresolved results: '+report.pending_dates.slice(-8).join(', ')));}
+}
+
 function render(){
   const games=lastData.games||[],root=$('games');root.replaceChildren();
   $('gamecount').textContent=games.length;
@@ -107,6 +274,8 @@ function render(){
   failure.firstChild.value='';for(const g of games){const opt=el('option','',g.event||g.away+' @ '+g.home);opt.value=g.slug;failure.append(opt)}
   failure.value=[...failure.options].some(o=>o.value===prev)?prev:'';
   renderStrategies();
+  renderJointResearch();
+  renderPaperTracking();
   const warnings=lastData.warnings||[],health=$('health');health.replaceChildren();
   if(lastData.line_model_metrics&&Object.keys(lastData.line_model_metrics).length){const metrics=lastData.line_model_metrics;health.append(el('div','',`Spread MAE: ${metrics.home_margin_holdout_mae??'N/A'} pts · Total MAE: ${metrics.total_holdout_mae??'N/A'} pts · 2025-26 holdout: ${metrics.holdout_games??'N/A'} games`));}
   warnings.forEach(w=>health.append(el('p','notice small',w)));
@@ -115,13 +284,274 @@ function render(){
   $('stamp').textContent=lastData.updated_at_utc?date(lastData.updated_at_utc):'Awaiting first refresh';
   $('state').textContent=status.refreshing?'Refreshing models and live market quotes…':status.last_error?'Last refresh failed: '+status.last_error:status.stale?'Waiting for a current snapshot…':'Automatic refresh running · updates every 10 minutes';
 }
+// PARLAY_GUARD_MARKET_LINE_AUDIT_V1
+async function renderMarketLineAudit(){
+  const root=$('market-audit-summary');if(!root)return;
+  try{
+    const response=await fetch('/api/market-line-validation',{cache:'no-store'});
+    if(!response.ok)throw new Error('HTTP '+response.status);
+    const report=await response.json();root.replaceChildren();
+    if(report.status){root.append(el('div','muted',report.message||report.status));return;}
+    const policy=report.quote_policy||{};
+    root.append(el('div','muted small','Reference bookmaker: '+(policy.bookmaker||'not set')+
+      ' · minimum '+(policy.lead_minutes??'—')+' minutes before tipoff'+
+      ' · live Polymarket prices NOT validated'));
+    const targets=report.targets||{};
+    for(const [key,name] of [['home_margin','Spread'],['total','Total']]){
+      const t=targets[key]||{},b=t.test_baseline||{},c=t.test_calibrated_on_support||{};
+      const line=el('div','ticket');line.append(el('b','',name+' · '+(t.status||'not evaluated')));
+      line.append(el('div','muted small','Validation quotes '+(t.validation_quotes_resolved??0)+
+        ' · test quotes '+(t.test_quotes_resolved??0)+
+        ' · Brier (raw) '+(b.brier==null?'—':Number(b.brier).toFixed(4))+
+        ' · ECE '+(b.ece_10_bins==null?'—':pct(b.ece_10_bins))));
+      line.append(el('div','muted small','Calibrated Brier on supported test quotes: '+
+        (c.brier==null?'unavailable':Number(c.brier).toFixed(4))+
+        ' · research gate '+(t.research_gate_passed?'passed':'not passed')));
+      root.append(line);
+    }
+    root.append(el('div','gold small','Reference bookmaker offers only; no guaranteed fills, validated Polymarket EV or automatic live-model replacement.'));
+  }catch(e){root.textContent='Historical audit unavailable: '+e.message;}
+}
+
 async function poll(){
   if(loading)return;loading=true;
-  try{const r=await fetch('/api/live/data',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);lastData=await r.json();render()}
+  try{const r=await fetch('/api/live/data',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);lastData=await r.json();render();renderMarketLineAudit()}
   catch(e){$('state').textContent='Local server unavailable: '+e.message}
   finally{loading=false}
 }
 $('refresh').onclick=async()=>{const r=await fetch('/api/live/refresh',{method:'POST'});$('state').textContent=r.ok?'Refresh queued; page will update when ready':'Refresh request failed';};
 $('budget').addEventListener('input',renderStrategies);$('failure').addEventListener('change',renderStrategies);
+
+// PARLAY_GUARD_BANKROLL_ALLOCATOR_V1
+// Display-only moneyline bankroll allocator. NO trading, order placement, or server writes.
+const PG_TEAMS = {
+  ATL:['Atlanta','Hawks',1610612737],BOS:['Boston','Celtics',1610612738],CLE:['Cleveland','Cavaliers',1610612739],
+  NOP:['New Orleans','Pelicans',1610612740],CHI:['Chicago','Bulls',1610612741],DAL:['Dallas','Mavericks',1610612742],
+  DEN:['Denver','Nuggets',1610612743],GSW:['Golden State','Warriors',1610612744],HOU:['Houston','Rockets',1610612745],
+  LAC:['Los Angeles','Clippers',1610612746],LAL:['Los Angeles','Lakers',1610612747],MIA:['Miami','Heat',1610612748],
+  MIL:['Milwaukee','Bucks',1610612749],MIN:['Minnesota','Timberwolves',1610612750],BKN:['Brooklyn','Nets',1610612751],
+  NYK:['New York','Knicks',1610612752],ORL:['Orlando','Magic',1610612753],IND:['Indiana','Pacers',1610612754],
+  PHI:['Philadelphia','76ers',1610612755],PHX:['Phoenix','Suns',1610612756],POR:['Portland','Trail Blazers',1610612757],
+  SAC:['Sacramento','Kings',1610612758],SAS:['San Antonio','Spurs',1610612759],OKC:['Oklahoma City','Thunder',1610612760],
+  TOR:['Toronto','Raptors',1610612761],UTA:['Utah','Jazz',1610612762],MEM:['Memphis','Grizzlies',1610612763],
+  WAS:['Washington','Wizards',1610612764],DET:['Detroit','Pistons',1610612765],CHA:['Charlotte','Hornets',1610612766]
+};
+function teamFullName(abbr) {
+  const row = PG_TEAMS[String(abbr || '').toUpperCase()];
+  return row ? row[0] + ' ' + row[1] : String(abbr || 'Unknown team');
+}
+function pgTeamBadge(abbr) {
+  const row = PG_TEAMS[String(abbr || '').toUpperCase()];
+  const div = el('div','pg-team');
+  const logo = el('div','pg-logo');
+  const fallback = el('span','pg-logo-fallback',String(abbr || '—'));
+  logo.append(fallback);
+  if (row) {
+    const img = el('img','pg-logo-image');
+    img.width = 48; img.height = 48; img.alt = teamFullName(abbr) + ' logo';
+    img.loading = 'lazy'; img.decoding = 'async';
+    img.onerror = () => { img.remove(); fallback.hidden = false; };
+    img.onload = () => { fallback.hidden = true; };
+    img.src = `https://cdn.nba.com/logos/nba/${row[2]}/global/L/logo.svg`;
+    logo.append(img);
+  }
+  const text = el('div','pg-team-label');
+  text.append(el('small','muted',row ? row[0] : ''),el('strong','',row ? row[1] : String(abbr || 'Unknown')));
+  div.append(logo,text);
+  return div;
+}
+function teamMatchup(away,home) {
+  const div = el('div','pg-matchup');
+  div.append(pgTeamBadge(away),el('span','pg-at','@'),pgTeamBadge(home));
+  return div;
+}
+function pgNumber(value) {
+  if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+function pgETDay(timestamp) {
+  const d = new Date(timestamp);
+  if (!Number.isFinite(d.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(d);
+  const v = Object.fromEntries(parts.map(p=>[p.type,p.value]));
+  return `${v.year}-${v.month}-${v.day}`;
+}
+function pgMoney(n) { return '$' + Number(n || 0).toFixed(2); }
+function pgPercentage(n) { return (Number(n || 0) * 100).toFixed(1) + '%'; }
+function pgAllocateMoneylines(input) {
+  const games = Array.isArray(input.games) ? input.games : [];
+  const bankroll = pgNumber(input.bankroll);
+  const dailyPct = pgNumber(input.dailyPct);
+  const perGamePct = pgNumber(input.perGamePct);
+  const minEv = pgNumber(input.minEv);
+  const committed = pgNumber(input.committed === undefined ? 0 : input.committed);
+  const now = new Date(input.now || Date.now());
+  const today = pgETDay(now);
+  const snapshotTime = input.updated_at_utc ? new Date(input.updated_at_utc) : null;
+  const snapshotAge = snapshotTime && Number.isFinite(snapshotTime.getTime()) ? (now - snapshotTime)/1000 : Infinity;
+  const valid = bankroll !== null && bankroll > 0 && bankroll <= 10000000 &&
+    dailyPct !== null && dailyPct >= 0 && dailyPct <= 0.20 &&
+    perGamePct !== null && perGamePct >= 0 && perGamePct <= 0.05 &&
+    minEv !== null && minEv >= 0 && minEv <= 1 &&
+    committed !== null && committed >= 0 && committed <= bankroll &&
+    Number.isFinite(now.getTime());
+  const stale = input.stale === true || snapshotAge > 15 * 60 || snapshotAge < -120;
+  const rows = [], allToday = games.filter(g=>g.game_date === today);
+  for(const g of allToday) {
+    const forecast = g.winner_forecast || null;
+    const team = forecast && forecast.predicted_winner;
+    const p = forecast ? pgNumber(forecast.predicted_winner_probability) : null;
+    const quote = team && (g.moneylines || {})[team];
+    const ask = quote ? pgNumber(quote.ask) : null;
+    const shares = quote ? pgNumber(quote.shares) : null;
+    const tipoff = new Date(g.tipoff_utc);
+    const ev = p !== null && ask !== null && ask > 0 && ask < 1 ? p/ask - 1 : null;
+    const row = {slug:g.slug,game_date:g.game_date,away:g.away,home:g.home,tipoff_utc:g.tipoff_utc,
+      winner:team || null,p,ask,shares,ev,stake:0,rawStake:0,reason:'',eligible:false};
+    if(!valid) row.reason='Enter a valid starting bankroll and risk caps';
+    else if(stale) row.reason='Live quotes are stale — refresh data';
+    else if(!Number.isFinite(tipoff.getTime()) || tipoff <= now) row.reason='Game has started';
+    else if(!team || p === null || p <= 0 || p >= 1) row.reason='No valid game winner forecast';
+    else if(ask === null || ask <= 0 || ask >= 1) row.reason='No valid moneyline best ask';
+    else if(shares === null || shares <= 0) row.reason='No available best-ask shares';
+    else if(ev === null || ev < minEv - 1e-12) row.reason=`Estimated EV below ${pgPercentage(minEv)} threshold`;
+    else {
+      // YES shares cost 'ask' each and settle at $1 if successful.
+      // Full Kelly fraction = (p - ask) / (1 - ask). Quarter Kelly + exposure caps.
+      const kelly = Math.max(0,(p-ask)/(1-ask));
+      const liquidityDollars = ask*shares;
+      row.rawStake = Math.max(0,Math.min(bankroll * 0.25*kelly,bankroll*perGamePct,liquidityDollars));
+      row.eligible = row.rawStake >= 0.01;
+      row.reason = row.eligible ? 'Model-qualified (research only)' : 'Quote depth or capped stake below $0.01';
+    }
+    rows.push(row);
+  }
+  const dailyCap = valid ? bankroll*dailyPct : 0;
+  const availableCap = Math.max(0,dailyCap - (valid ? committed : 0));
+  const totalRaw = rows.reduce((sum,r)=>sum+r.rawStake,0);
+  const scale = totalRaw > availableCap && totalRaw > 0 ? availableCap / totalRaw : 1;
+  for(const row of rows) {
+    // Floor to whole cents, never exceed an exposure or observed quote-depth cap.
+    row.stake = Math.floor((row.rawStake*scale + 1e-9)*100)/100;
+    if(row.eligible && row.stake < .01) row.reason='Daily cap exhausted / stake below $0.01';
+  }
+  const spent = rows.reduce((sum,r)=>sum + Math.round(r.stake*100),0)/100;
+  return {today,valid,stale,bankroll:bankroll || 0,dailyCap,committed:valid?committed:0,spent,unallocated:Math.max(0,dailyCap-(valid?committed:0)-spent),
+    totalGames:allToday.length,active:rows.filter(r=>r.stake>0).length,rows};
+}
+function pgBudgetOptions() {
+  const fields = id => document.getElementById(id);
+  return {
+    bankroll:fields('pg-bankroll').value,
+    committed:fields('pg-committed').value,
+    dailyPct:fields('pg-daily-pct').value,
+    perGamePct:fields('pg-game-pct').value,
+    minEv:fields('pg-min-ev').value
+  };
+}
+let pgLastLoadedDay = null;
+function pgCommittedKey(today) {return 'parlay-guard-moneyline-committed-v1-'+today;}
+function pgRestoreBudget() {
+  try {
+    const saved = window.localStorage.getItem('parlay-guard-moneyline-bankroll-v1');
+    if(saved && Number(saved)>0 && Number(saved)<=10000000) $('pg-bankroll').value=saved;
+    const day=pgETDay(Date.now());
+    const used=window.localStorage.getItem(pgCommittedKey(day));
+    $('pg-committed').value=used && Number(used)>=0 ? used : '0';
+    pgLastLoadedDay=day;
+  } catch (_) {/* Private mode may disable storage */}
+}
+function pgBindBudget() {
+  pgRestoreBudget();
+  for(const id of ['pg-bankroll','pg-committed','pg-daily-pct','pg-game-pct','pg-min-ev']) {
+    $(id).addEventListener('input',() => {
+      if(id === 'pg-bankroll') {
+        try { window.localStorage.setItem('parlay-guard-moneyline-bankroll-v1',$(id).value); } catch (_) {}
+      }
+      if(id === 'pg-committed') {
+        try { window.localStorage.setItem(pgCommittedKey(pgETDay(Date.now())),$(id).value); } catch (_) {}
+      }
+      renderMoneylinePlanner();
+    });
+  }
+}
+function renderMoneylinePlanner() {
+  const activeDay=pgETDay(Date.now());
+  if(pgLastLoadedDay && pgLastLoadedDay !== activeDay) {
+    try { $('pg-committed').value=window.localStorage.getItem(pgCommittedKey(activeDay)) || '0'; } catch (_) { $('pg-committed').value='0'; }
+    pgLastLoadedDay=activeDay;
+  }
+  const root=$('pg-moneyline-results'), opts=pgBudgetOptions();
+  const result=pgAllocateMoneylines({...opts,games:lastData.games||[],updated_at_utc:lastData.updated_at_utc,
+    stale:lastData.refresh_status?.stale === true,now:Date.now()});
+  $('pg-cap').textContent=pgMoney(result.dailyCap);
+  $('pg-total').textContent=pgMoney(result.spent);
+  $('pg-committed-total').textContent=pgMoney(result.committed);
+  $('pg-left').textContent=pgMoney(result.unallocated);
+  $('pg-count').textContent=String(result.active)+' / '+result.totalGames;
+  $('pg-day').textContent=result.today || 'Today';
+  root.replaceChildren();
+  if(!result.valid) root.append(el('p','gold','Enter a valid bankroll and risk limits.'));
+  else if(result.stale) root.append(el('p','gold','Snapshot is stale or missing. Allocations are $0 until a new quote is available.'));
+  else if(!result.totalGames) root.append(el('p','muted','No remaining scheduled games for today in the current snapshot.'));
+  else {
+    for(const r of result.rows) {
+      const row=el('div','pg-plan-row');
+      const left=el('div','pg-plan-team');
+      left.append(el('strong','',teamFullName(r.winner || r.home)),el('small','muted',teamFullName(r.away)+' @ '+teamFullName(r.home)));
+      const right=el('div','pg-plan-numbers');
+      right.append(el('strong',r.stake>0?'green':'muted',pgMoney(r.stake)),
+        el('small','muted',r.ev==null?'No quote / probability':`Model EV ${pgPercentage(r.ev)} · ask ${r.ask.toFixed(3)}`));
+      row.append(left,right);root.append(row);
+    }
+  }
+  const bySlug=new Map(result.rows.map(r=>[r.slug,r]));
+  document.querySelectorAll('[data-pg-moneyline-slug]').forEach(node=>{
+    const r=bySlug.get(node.dataset.pgMoneylineSlug);
+    node.replaceChildren();
+    if(!r){node.append(el('strong','muted','Today’s moneyline allocation: Not scheduled for today'));return;}
+    const header=el('div','pg-reco-head');
+    header.append(el('span','muted small','Moneyline paper stake · '+teamFullName(r.winner || r.home)),
+      el('strong',r.stake>0?'green':'muted',pgMoney(r.stake)));
+    node.append(header);
+    const detail= r.stake>0 ? `Elo ${pgPercentage(r.p)} · ask ${r.ask.toFixed(3)} · model EV ${pgPercentage(r.ev)} · max loss ${pgMoney(r.stake)}` : r.reason;
+    node.append(el('small',r.stake>0?'muted':'gold',detail));
+  });
+}
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports={pgAllocateMoneylines,pgETDay,teamFullName,PG_TEAMS};
+}
+
+
+// PARLAY_GUARD_BANKROLL_ALLOCATOR_V2: add logos and allocations without rewriting existing render functions.
+function pgDecorateGameCards(games) {
+  const cards = document.querySelectorAll('#games > .card');
+  for (let i = 0; i < cards.length && i < games.length; i++) {
+    const card = cards[i], g = games[i];
+    const heading = card.querySelector('.head h3');
+    if (heading) heading.replaceWith(teamMatchup(g.away, g.home));
+    const winner = card.querySelector('.winner b');
+    if (winner && g.winner_forecast) winner.textContent = teamFullName(g.winner_forecast.predicted_winner);
+    let stake = card.querySelector('[data-pg-moneyline-slug]');
+    if (!stake) {
+      stake = el('div', 'pg-recommendation');
+      stake.dataset.pgMoneylineSlug = g.slug;
+      const metrics = card.querySelector('.metrics');
+      if (metrics) metrics.insertAdjacentElement('afterend', stake);
+      else card.append(stake);
+    }
+  }
+}
+const pgOriginalRender = render;
+render = function (...args) {
+  const returned = pgOriginalRender.apply(this, args);
+  pgDecorateGameCards(lastData.games || []);
+  renderMoneylinePlanner();
+  return returned;
+};
+pgBindBudget();
+
 poll();setInterval(poll,20000);
-</script></body></html>
+</script><script src="/college-preview.js" defer></script>
+</body></html>

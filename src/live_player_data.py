@@ -27,7 +27,7 @@ def fetch_completed_player_games(season):
 
 
 def build_overlay(base:pd.DataFrame, raw:pd.DataFrame, cutoff:date):
-    from parlay_guard.src.player_prop_common import prepare_history, build_feature_row, season_of_date, ROLLING_STATS
+    from .player_prop_common import prepare_history, build_feature_row, season_of_date, ROLLING_STATS
     original_columns=list(base.columns)
     history=prepare_history(base)
     prior=history.groupby('PLAYER_ID',sort=False)

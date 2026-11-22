@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0,str(Path(__file__).parent))
-from game_lines_live import feature_training,fit_line_models,predict_line
+from src.game_lines_live import feature_training, fit_line_models, predict_line
 import types
 from src.auto_live import match_team,choose_market_line,moneyline_quotes,assemble_data,eligible_props
 

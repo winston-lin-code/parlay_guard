@@ -7,9 +7,8 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-import parlay_guard.src.add_parlay_comparison as ui
-import parlay_guard.src.paper_strategy_results as paper
-
+import src.add_parlay_comparison as ui
+import src.paper_strategy_results as paper
 class FakeResponse:
     def __init__(self,value):self.value=value
     def raise_for_status(self):pass
