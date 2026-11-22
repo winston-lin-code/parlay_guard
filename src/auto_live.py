@@ -160,7 +160,8 @@ def moneyline_quotes(session,events):
             token=str(b.get('asset_id') or b.get('token_id') or '')
             if token not in token_to_team:continue
             slug,team=token_to_team[token];price,size=book_ask(b)
-            by_slug[slug][team]={'ask':price,'shares':size,'token_id':token}
+            by_slug[slug][team]={'ask':price,'shares':size,'token_id':token,
+                                'observed_at_utc':datetime.now(timezone.utc).isoformat()}
     return by_slug
 
 
