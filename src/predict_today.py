@@ -103,11 +103,7 @@ def fetch_scoreboard(target: date) -> pd.DataFrame:
     return out
 
 
-def fetch_espn_schedule(target: date, include_completed: bool = False) -> pd.DataFrame:
-    """Fallback date-specific NBA schedule via ESPN's public scoreboard JSON.
-
-    ESPN event IDs are prefixed to distinguish them from NBA game IDs.
-    """
+def fetch_espn_scoreboard(target: date) -> list:
     import requests
 
     url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
@@ -115,9 +111,16 @@ def fetch_espn_schedule(target: date, include_completed: bool = False) -> pd.Dat
                             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
                             timeout=30)
     response.raise_for_status()
-    payload = response.json()
+    events = response.json().get("events")
+    if not isinstance(events, list):
+        raise ValueError(f"ESPN scoreboard lacks events for {target}")
+    return events
+
+
+def fetch_espn_schedule(target: date, include_completed: bool = False) -> pd.DataFrame:
+    """Fallback date-specific NBA schedule via ESPN's public scoreboard JSON."""
     records = []
-    for event in payload.get("events", []):
+    for event in fetch_espn_scoreboard(target):
         competitions = event.get("competitions", [])
         if len(competitions) != 1:
             continue
@@ -228,13 +231,16 @@ def fetch_current_season(season: str, csv_path: Path | None) -> pd.DataFrame:
                 league_id_nullable="00",
                 season_nullable=season,
                 season_type_nullable="Regular Season",
-                timeout=60,
+                timeout=35,
             ).get_data_frames()[0]
-        except Exception as e:
-            raise RuntimeError(
-                "NBA Stats download failed or timed out. Export 2026-27 regular-season "
-                "LeagueGameFinder results to CSV and rerun with --season-csv PATH."
-            ) from e
+            if df.empty:
+                raise ValueError("NBA Stats returned no completed games")
+        except Exception:
+            from .espn_season import fetch_espn_season
+
+            print(f"NBA Stats unavailable for {season}; using ESPN final scores.", flush=True)
+            df = fetch_espn_season(season, datetime.now(ET).date(), DATA / "espn_nba_results",
+                                   fetch_espn_scoreboard, normalize_schedule_team)
         # Preserve source data, never overwrite original 4-season files.
         cache = DATA / f"nba_{season.replace('-', '_')}_latest_raw.csv"
         df.to_csv(cache, index=False)

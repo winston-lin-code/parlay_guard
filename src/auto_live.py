@@ -169,7 +169,11 @@ def _command(args,*,timeout=180):
     proc=subprocess.run([sys.executable,*args],cwd=str(ROOT),capture_output=True,
                         text=True,encoding='utf-8',errors='replace',timeout=timeout)
     if proc.returncode:
-        raise RuntimeError(f'{" ".join(args)} failed: {(proc.stderr or proc.stdout)[-600:]}')
+        details = (proc.stderr or proc.stdout).strip().splitlines()
+        reason = details[-1] if details else f'exit code {proc.returncode}'
+        if args[:2] == ['-m', 'src.predict_today']:
+            raise RuntimeError(reason)
+        raise RuntimeError(f'{" ".join(args)} failed: {reason}')
     return proc.stdout[-350:]
 
 
@@ -190,7 +194,7 @@ def update_forecasts(game_dates,now,errors):
         try:
             # Without --season-csv, src.predict_today contacts official NBA Stats
             # for the latest COMPLETED team games and refreshes its local cache.
-            _command(cmd,timeout=170)
+            _command(cmd,timeout=240)
         except Exception as exc:
             fresh=False
             if csv.exists():
