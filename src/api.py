@@ -18,6 +18,7 @@ ARCHIVE=ROOT/'models/parlay_guard_v1_vs_v2.html'
 ARCHIVE_STRATEGY=ROOT/'models/parlay_comparison.html'
 
 from .live_dashboard_api import router as live_dashboard_router
+from .deploy_artifacts import restore_forecast_inputs
 
 class LiveState:
     def __init__(self):
@@ -121,6 +122,7 @@ state=LiveState()
 
 @asynccontextmanager
 async def lifespan(app:FastAPI):
+    restore_forecast_inputs(ROOT)
     if os.getenv('PG_DISABLE_AUTO_REFRESH')!='1':state.start()
     yield
     state.shutdown()
