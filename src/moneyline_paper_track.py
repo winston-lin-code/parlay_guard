@@ -144,7 +144,7 @@ def _candidate(game: dict, observed: datetime, source_time: datetime, config: di
             return None, 'not_before_tipoff'
         if tip - observed > timedelta(hours=CAPTURE_WINDOW_HOURS):
             return None, 'outside_capture_window'
-        win = game.get('winner_forecast') or {}
+        win = game.get('elo_winner_forecast', game.get('winner_forecast')) or {}
         generated = _utc(win.get('forecast_generated_at_utc'))
         if not generated <= observed or observed - generated > timedelta(hours=6):
             return None, 'missing_or_stale_winner_forecast'

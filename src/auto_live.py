@@ -1,8 +1,8 @@
 """Parlay Guard automatic live NBA research snapshot.
 
-Local development service (no order placement). Uses the user's EXISTING frozen
-winner and player models, the Polymarket scanner, audited feature reconstructor
-and positive-EV screen. Actual two-leg prop tickets are NOT exchange quoted.
+Local development service (no order placement). Combines the pregame Elo
+rating difference with scoring form, and uses the existing player models and
+Polymarket scanner for paper research.
 """
 from __future__ import annotations
 import json
@@ -235,6 +235,7 @@ def latest_game_forecasts(events,now):
                 by_match.setdefault((day,away,home),{
                     'home_probability':round(p,5),
                     'home_gb_probability':round(p2,5) if p2 is not None else None,
+                    'elo_diff':as_num(row.get('ELO_DIFF')),
                     'predicted_winner':home if p>=.5 else away,
                     'predicted_winner_probability':round(max(p,1-p),5),
                     'model':'Frozen Elo home-win model',
@@ -261,7 +262,9 @@ def lines_from_history(now,errors):
         current = fetch_current_season(season, current_path)
         historical=clean_team_history(past,current,day)
         completed=make_completed_games(historical)
-        models,hist,metrics=fit_line_models(completed)
+        models,hist,metrics=fit_line_models(completed, include_elo=True)
+        if models['margin_probability'] is None:
+            errors.append('Unified forecast unavailable: insufficient walk-forward probability fit.')
         current_age=(day-pd.to_datetime(current.GAME_DATE).max().date()).days
         if current_age>3:raise ValueError(f'Current NBA team results are stale ({current_age} days)')
         return models,hist,metrics
@@ -308,16 +311,29 @@ def assemble_data(events,win_forecasts,lines,history,metrics,props,quotes,now,er
     games=[]
     for event in events:
         slug=event['slug'];day=event['game_date'];home=event['home'];away=event['away']
-        win=win_forecasts.get((day,away,home))
+        elo = win_forecasts.get((day,away,home))
+        win = elo
         line=None
-        if lines is not None:
-            line=predict_line(lines,history,home=home,away=away,game_day=day)
+        if lines is not None and elo is not None:
+            line = predict_line(lines, history, home=home, away=away, game_day=day,
+                                elo_diff=elo.get('elo_diff'))
+        if line is not None:
+            margin = line['home_margin']
+            p = line['home_win_probability']
+            win = {
+                **elo,
+                'home_probability': p,
+                'predicted_winner': home if margin > 0 else away,
+                'predicted_winner_probability': max(p, 1 - p),
+                'model': line['method'],
+            } if margin else None
         moneyline=quotes.get(slug,{})
-        candidates=(props.get(slug,[]) if win else [])
+        candidates=(props.get(slug,[]) if elo else [])
         chosen=[p for p in candidates if p['team']==win['predicted_winner']][:3] if win else []
         # No forcing inferior selections to fill a parlay; 2 distinct players required.
         gs={**{k:v for k,v in event.items() if k!='markets'},
             'winner_forecast':win,'game_line_prediction':line,
+            'elo_winner_forecast':elo,
             'market_spread':choose_market_line(event['markets'],'spreads'),
             'market_total':choose_market_line(event['markets'],'totals'),
             'moneylines':moneyline,'selected_props':chosen,

@@ -84,6 +84,51 @@ def test_line_model():
     assert pred['projected_total']>0
     assert pred['home_spread']==round(-pred['home_margin'],1)
 
+
+def test_unified_forecast_walk_forward_and_live_card(monkeypatch):
+    rng = np.random.default_rng(17)
+    rows = []
+    days = pd.date_range('2024-07-01', '2026-06-01')
+    for i, day in enumerate(days):
+        home, away = ('ORL', 'DET') if i % 2 else ('DET', 'ORL')
+        home_points = 115 + (5 if home == 'DET' else -5) + rng.normal(0, 8)
+        away_points = 112 + (5 if away == 'DET' else -5) + rng.normal(0, 8)
+        season = '2024-25' if day.year == 2024 or day.month < 7 and day.year == 2025 else '2025-26'
+        rows.append({
+            'GAME_ID': str(i), 'GAME_DATE': day, 'SEASON': season,
+            'HOME_TEAM': home, 'AWAY_TEAM': away, 'HOME_WIN': int(home_points > away_points),
+            'HOME_PTS': home_points, 'AWAY_PTS': away_points,
+        })
+    models, history, metrics = fit_line_models(pd.DataFrame(rows), include_elo=True)
+    assert {'margin_holdout_brier', 'elo_holdout_brier', 'margin_holdout_log_loss',
+            'elo_holdout_log_loss'} <= metrics.keys()
+    assert models['margin_probability'].predict_proba([[0]])[0, 1] == 0.5
+    line = predict_line(models, history, home='ORL', away='DET', game_day='2026-06-02', elo_diff=-100)
+    assert np.isclose(line['home_margin'], line['home_points'] - line['away_points'])
+    assert np.isclose(line['projected_total'], line['home_points'] + line['away_points'])
+    assert line['home_spread'] == -line['home_margin']
+    assert (line['home_win_probability'] > 0.5) == (line['home_margin'] > 0)
+    assert predict_line(models, history, home='ORL', away='DET', game_day='2026-06-02') is None
+
+    now = datetime(2026, 6, 2, tzinfo=timezone.utc)
+    event = {'slug': 'nba-det-orl-2026-06-02', 'home': 'ORL', 'away': 'DET',
+             'game_date': '2026-06-02', 'markets': []}
+    elo = {'predicted_winner': 'DET', 'home_probability': .436, 'elo_diff': -100}
+    arguments = ([event], {('2026-06-02', 'DET', 'ORL'): elo}, models, history, metrics,
+                 {event['slug']: [{'team': 'ORL'}, {'team': 'DET'}]}, {}, now, [])
+    projected = {**line, 'home_margin': .5, 'home_spread': -.5, 'home_win_probability': .515}
+    monkeypatch.setattr('src.auto_live.predict_line', lambda *args, **kwargs: projected)
+    game = assemble_data(*arguments)['games'][0]
+    assert game['winner_forecast']['predicted_winner'] == 'ORL'
+    assert game['winner_forecast']['home_probability'] == .515
+    assert game['elo_winner_forecast']['predicted_winner'] == 'DET'
+    assert game['selected_props'] == [{'team': 'ORL'}]
+
+    projected.update(home_margin=0, home_spread=0, home_win_probability=.5)
+    game = assemble_data(*arguments)['games'][0]
+    assert game['winner_forecast'] is None
+    assert game['selected_props'] == []
+
 if __name__=='__main__':
     import tempfile
     test_names();test_market();test_moneyline()

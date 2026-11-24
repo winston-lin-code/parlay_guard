@@ -112,7 +112,7 @@ def candidate(game, observed, source, cfg, ids):
             return None, 'not_pretipoff'
         if tip - observed > timedelta(hours=CAPTURE_HOURS):
             return None, 'outside_shared_capture_window'
-        win = game['winner_forecast']
+        win = game.get('elo_winner_forecast', game.get('winner_forecast')) or {}
         if not isinstance(win, dict):
             return None, 'missing_forecast'
         generated = utc(win['forecast_generated_at_utc'])
