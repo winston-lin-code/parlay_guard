@@ -70,7 +70,7 @@ main{max-width:1330px;margin:0 auto;padding:32px 22px 70px}.brand{font-weight:80
 </div>
 <div class="pg-summary"><div class="pg-sum"><small>Daily risk ceiling</small><strong id="pg-cap">—</strong></div><div class="pg-sum"><small>Already committed</small><strong id="pg-committed-total">—</strong></div><div class="pg-sum"><small>New paper allocation</small><strong id="pg-total">—</strong></div><div class="pg-sum"><small>Remaining risk allowance</small><strong id="pg-left">—</strong></div><div class="pg-sum"><small>Funded / today’s games</small><strong id="pg-count">—</strong></div></div>
 <div id="pg-moneyline-results" aria-live="polite"></div>
-<p class="pg-risk-note">Sizing: quarter-Kelly from Elo probability and observed best ask, limited by the per-game cap, daily cap and displayed top-of-book shares. Quotes can move and fills are not assured. EV estimates are unvalidated and can be wrong. Enter stakes already committed today to avoid double-counting the daily cap after earlier games disappear from the live page. Unused bankroll is deliberately not forced into negative-edge bets. No orders are submitted; changing these controls does not modify frozen experiments.</p>
+<p class="pg-risk-note">Sizing: quarter-Kelly from the displayed win probability and observed best ask, limited by the per-game cap, daily cap and displayed top-of-book shares. Quotes can move and fills are not assured. EV estimates are unvalidated and can be wrong. Enter stakes already committed today to avoid double-counting the daily cap after earlier games disappear from the live page. Unused bankroll is deliberately not forced into negative-edge bets. No orders are submitted; changing these controls does not modify frozen experiments.</p>
 </section>
 <section><h2>Strategy comparison</h2><p class="muted">The same screened player props are used for singles, same-game, and cross-game ticket examples. Moneylines use the model's winner for each game. Equal total stake across strategies.</p>
 <div class="controls"><label>Budget <span>$</span><input id="budget" type="number" min="1" max="500" step="5" value="20"></label><label>Illustrate a game failing <select id="failure"><option value="">None — all selected legs win</option></select></label></div>
@@ -100,7 +100,7 @@ Line probabilities are evaluated on synthetic historical thresholds, not real ma
 </section>
 
 <section><h2>Data health</h2><div class="note" id="health">Waiting for first data refresh…</div></section>
-<p class="foot">This tool never places bets. Game-win probabilities come from your frozen Elo model. Spread and total estimates come from a separate historical regression with a 2025–26 holdout. Player-prop EV is exploratory and conditional on model assumptions; player availability is unverified. Markets and models are refreshed on separate schedules while Uvicorn runs.</p>
+<p class="foot">This tool never places bets. The live win probability, spread and scores use the same projected margin when available. The Elo-only fallback provides a winner probability. Frozen moneyline experiments continue to use Elo. Player-prop EV is exploratory and conditional on model assumptions; player availability is unverified. Markets and models are refreshed on separate schedules while Uvicorn runs.</p>
 </main>
 <script>
 const el=(tag,cls,txt)=>{const a=document.createElement(tag);if(cls)a.className=cls;if(txt!==undefined)a.textContent=txt;return a};
@@ -114,15 +114,17 @@ function boxMetric(title,value){const d=el('div','metric');d.append(el('small','
 function renderGame(g){
   const c=el('article','card'),head=el('div','head');const title=el('div');
   title.append(el('h3','',g.away+' @ '+g.home),el('small','muted',date(g.tipoff_utc)));
-  const pill=el('span','pill',g.winner_forecast?'WIN MODEL READY':'NO VERIFIED FORECAST');
+  const line=g.game_line_prediction;
+  const pickEm=line?.home_margin===0;
+  const pill=el('span','pill',g.winner_forecast?'WIN MODEL READY':pickEm?'PICK’EM':'NO VERIFIED FORECAST');
   head.append(title,pill);c.append(head);
   const win=g.winner_forecast,m=el('div','winner');
-  m.append(el('span','muted','Predicted winner:'),el('b','',win?win.predicted_winner:'Unavailable'),el('span',win?'green':'gold',win?pct(win.predicted_winner_probability):'Forecast missing or stale'));
+  m.append(el('span','muted','Predicted winner:'),el('b','',win?win.predicted_winner:pickEm?'Pick’em':'Unavailable'),el('span',win?'green':'gold',win?pct(win.predicted_winner_probability):pickEm?'50% each':'Forecast missing or stale'));
   c.append(m);
   const metrics=el('div','metrics'),ml=win?(g.moneylines||{})[win.predicted_winner]:null;
-  metrics.append(boxMetric('Winner moneyline (ask)',ml?.ask?american(ml.ask):'—'),boxMetric('Win model (Elo)',win?pct(win.predicted_winner_probability):'—'));
-  const line=g.game_line_prediction;
-  metrics.append(boxMetric('Projected spread',line?(g.home+' '+(line.home_spread<0?'−':'+')+Math.abs(line.home_spread).toFixed(1)):'—'));
+  metrics.append(boxMetric('Winner moneyline (ask)',ml?.ask?american(ml.ask):'—'),boxMetric(line?'Win model (projected margin)':'Win model (Elo)',win?pct(win.predicted_winner_probability):pickEm?'50% each':'—'));
+  const favorite=line?.home_margin>0?g.home:g.away;
+  metrics.append(boxMetric('Projected spread',line?(pickEm?'Pick’em':favorite+' −'+Math.abs(line.home_spread).toFixed(1)):'—'));
   metrics.append(boxMetric('Projected total',line?line.projected_total.toFixed(1):'—'));
   metrics.append(boxMetric('Polymarket spread (indicative)',g.market_spread?g.market_spread.team_label+' '+g.market_spread.line:'—'));
   metrics.append(boxMetric('Polymarket total (indicative)',g.market_total?g.market_total.line.toFixed(1):'—'));
@@ -130,7 +132,7 @@ function renderGame(g){
   if(line){c.append(el('p','muted small','Projected score: '+g.away+' '+line.away_points+' · '+g.home+' '+line.home_points+'. Spread/total model is not calibrated for betting EV.'));}
   const pd=el('div','props');pd.append(el('h3','','Selected props — '+(win?win.predicted_winner:'winner unavailable')));
   const picks=g.selected_props||[];
-  if(!win){pd.append(el('div','muted','No winner-model output. Props are not automatically assigned.'))}
+  if(!win){pd.append(el('div','muted','Winner-team props require a projected favorite.'))}
   else if(!picks.length){pd.append(el('div','muted','No liquid, positive-stress-EV props from the predicted winning team. No selection forced.'))}
   for(const prop of picks){
     const row=el('div','prop'),left=el('div');left.append(el('strong','',prop.player+' · '+prop.stat+' '+prop.side+' '+prop.line),el('small','muted','Research only · availability unverified'));
@@ -515,7 +517,7 @@ function renderMoneylinePlanner() {
     header.append(el('span','muted small','Moneyline paper stake · '+teamFullName(r.winner || r.home)),
       el('strong',r.stake>0?'green':'muted',pgMoney(r.stake)));
     node.append(header);
-    const detail= r.stake>0 ? `Elo ${pgPercentage(r.p)} · ask ${r.ask.toFixed(3)} · model EV ${pgPercentage(r.ev)} · max loss ${pgMoney(r.stake)}` : r.reason;
+    const detail= r.stake>0 ? `Win probability ${pgPercentage(r.p)} · ask ${r.ask.toFixed(3)} · model EV ${pgPercentage(r.ev)} · max loss ${pgMoney(r.stake)}` : r.reason;
     node.append(el('small',r.stake>0?'muted':'gold',detail));
   });
 }

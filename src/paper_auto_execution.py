@@ -59,7 +59,7 @@ def _candidate(game, now):
         return None, "outside_pregame_window"
     home = str(game.get("home") or "").upper()
     away = str(game.get("away") or "").upper()
-    forecast = game.get("winner_forecast") or {}
+    forecast = game.get("elo_winner_forecast", game.get("winner_forecast")) or {}
     chosen = str(forecast.get("predicted_winner") or "").upper()
     p_home = _num(forecast.get("home_probability"))
     generated = _utc(forecast.get("forecast_generated_at_utc"))

@@ -174,6 +174,9 @@ def _line_candidate(game, kind, sigma):
     if threshold is None:
         return None
     if kind == 'spread':
+        # The existing spread calibrator and residuals use the original scoring model.
+        if 'home_win_probability' in forecast:
+            return None
         where = _side_from_market(game, market)
         margin = _finite(forecast.get('home_margin'))
         if where is None or margin is None:
@@ -260,11 +263,13 @@ def build_joint_research(snapshot: dict, root: Path) -> dict:
     from .calibrate_game_lines import load_calibrator
     calibrator = load_calibrator(root / 'models/game_line_calibration_v1.json')
     targets = (calibrator or {}).get('targets', {})
+    unified_margin = any('home_win_probability' in (game.get('game_line_prediction') or {})
+                         for game in games)
     payload['line_calibration'] = {
         'status': ('synthetic_thresholds_evaluated' if calibrator and any(
             v.get('use_for_research') for v in targets.values()) else 'not_validated'),
         'market_line_validated': False,
-        'spread_gate': targets.get('home_margin', {}).get('use_for_research', False),
+        'spread_gate': not unified_margin and targets.get('home_margin', {}).get('use_for_research', False),
         'total_gate': targets.get('total', {}).get('use_for_research', False),
         'spread_test': targets.get('home_margin', {}).get('test_calibrated'),
         'total_test': targets.get('total', {}).get('test_calibrated'),
