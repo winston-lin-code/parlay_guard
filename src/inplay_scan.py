@@ -306,10 +306,21 @@ def scan_opportunities():
         games = parse_games([event for events in boards for event in events], started)
         coverage["games"] = len(games)
         coverage["live_games"] = sum(game["phase"] == "in" for game in games.values())
+        scan_games = {
+            slug: {"event": slug, "slug": slug, "sport": "Basketball", "league": "NBA",
+                   "title": f"{game['away']} @ {game['home']}", "start_utc": game["tip"].isoformat(),
+                   "phase": "live" if game["phase"] == "in" else "pregame",
+                   "score_text": f"{int(game['away_score'])}–{int(game['home_score'])}" if game["phase"] == "in" else "",
+                   "clock_text": game["clock"] or "",
+                   "period_text": f"Q{int(game['period'])}" if game["phase"] == "in" else "",
+                   "open_markets": 0, "modeled_markets": 0, "priced_sides": 0}
+            for slug, game in games.items()
+        }
         candidates = []
         for game, markets in zip(games.values(), pool.map(
                 lambda g: fetch(g["slug"], event_markets, g, []), games.values())):
             coverage["open_markets"] += len(markets)
+            scan_games[game["slug"]]["open_markets"] = len(markets)
             if not any(m.get("sportsMarketType") in SCORING_MARKETS for m in markets):
                 continue
             prior = fetch("NBA pregame inputs", game_prior, game, None)
@@ -328,6 +339,7 @@ def scan_opportunities():
                 fees = fee_schedule(market)
                 if sides is not None and fees is not None:
                     coverage["modeled_markets"] += 1
+                    scan_games[game["slug"]]["modeled_markets"] += 1
                     candidates.append((game, market, sides, fees))
         tokens = list(dict.fromkeys(token for _, _, sides, _ in candidates for token, _, _ in sides))
         batches = [tokens[i:i + 100] for i in range(0, len(tokens), 100)]
@@ -358,6 +370,7 @@ def scan_opportunities():
             if priced is None:
                 continue
             coverage["priced_sides"] += 1
+            scan_games[game["slug"]]["priced_sides"] += 1
             if priced["screened_ev"] <= 0:
                 continue
             opportunities.append({
@@ -372,5 +385,6 @@ def scan_opportunities():
         "version", "calibration_season", "holdout_season", "holdout_games", "market_lines", "holdout",
     )} if calibration else None
     return {"updated_utc": now.isoformat(), "coverage": coverage, "calibration": calibration_summary,
+            "games": list(scan_games.values()),
             "opportunities": sorted(opportunities, key=lambda row: -row["screened_ev"]),
             "warnings": sorted(set(warnings))}

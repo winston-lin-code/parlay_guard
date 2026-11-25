@@ -10,6 +10,8 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from .inplay_scan import MAX_AGE, SCORING_MARKETS, scan_catalog, scan_opportunities, utc
 
+from .sports_inventory import scan_sports_events
+
 router = APIRouter()
 PAGE = Path(__file__).resolve().parents[1] / "static" / "inplay.html"
 
@@ -21,10 +23,12 @@ class ScanState:
         self.workers = []
         self.snapshot = {"updated_utc": None, "coverage": {}, "opportunities": [], "warnings": []}
         self.catalog = {"cataloged": 0, "open_order_books": 0, "status": "waiting"}
+        self.sports = {"status": "waiting", "games": []}
+        self.has_complete_sports_slate = False
 
     def start(self):
         self.stop.clear()
-        for target in (self.live_loop, self.catalog_loop):
+        for target in (self.live_loop, self.catalog_loop, self.sports_loop):
             worker = threading.Thread(target=target, daemon=True)
             worker.start()
             self.workers.append(worker)
@@ -60,9 +64,32 @@ class ScanState:
                     self.catalog = {**self.catalog, "status": "partial"}
             self.stop.wait(15 * 60)
 
+    def update_sports_progress(self, value):
+        with self.lock:
+            # Keep the last full slate visible while the new pass is incomplete.
+            if not self.has_complete_sports_slate:
+                self.sports = value
+
+    def sports_loop(self):
+        while not self.stop.is_set():
+            try:
+                value = scan_sports_events(self.stop, self.update_sports_progress)
+                with self.lock:
+                    if value["status"] == "complete":
+                        self.has_complete_sports_slate = True
+                        self.sports = value
+                    elif value["games"] and not self.has_complete_sports_slate:
+                        self.sports = value
+                    else:
+                        self.sports = {**self.sports, "status": "partial"}
+            except Exception:
+                with self.lock:
+                    self.sports = {**self.sports, "status": "partial"}
+            self.stop.wait(90)
+
     def read(self):
         with self.lock:
-            snapshot, catalog = dict(self.snapshot), dict(self.catalog)
+            snapshot, catalog, sports = dict(self.snapshot), dict(self.catalog), dict(self.sports)
         now = datetime.now(timezone.utc)
         observed = utc(snapshot.get("updated_utc"))
         stale = observed is None or not -5 <= (now - observed).total_seconds() <= MAX_AGE
@@ -72,7 +99,7 @@ class ScanState:
                 quote = utc(row.get("quote_utc"))
                 if quote is not None and -5 <= (now - quote).total_seconds() <= MAX_AGE:
                     fresh.append(row)
-        return {**snapshot, "catalog": catalog, "stale": stale, "opportunities": fresh,
+        return {**snapshot, "catalog": catalog, "sports": sports, "stale": stale, "opportunities": fresh,
                 "venue": "Polymarket CLOB (international)", "supported_markets": sorted(SCORING_MARKETS)}
 
 

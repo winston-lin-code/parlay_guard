@@ -62,6 +62,27 @@ h2 { font-size: 1.3rem; letter-spacing: -.028em; }
 .filters label { position: relative; padding: 7px 12px; border-radius: 5px; cursor: pointer; color: var(--muted); font-size: .8125rem; font-weight: 650; }
 .filters label:has(input:checked) { background: var(--green); color: #162015; }
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.sport-picker { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); padding: 8px 10px; font: inherit; font-size: .84rem; max-width: 245px; }
+.board { display: grid; gap: 13px; }
+.league { border: 1px solid var(--line); background: var(--surface); border-radius: 11px; }
+.league > summary { padding: 13px 16px; line-height: 1.35; }
+.league-count, .game-status { color: var(--muted); font-size: .8rem; font-weight: 450; }
+.league-count { margin-left: 10px; }
+.fixture { border-top: 1px solid var(--line); }
+.fixture-header { display: flex; justify-content: space-between; align-items: start; flex-wrap: wrap; gap: 7px 15px; padding: 13px 16px; }
+.fixture-title { font-size: 1rem; letter-spacing: -.015em; }
+.fixture-meta { display: flex; gap: 6px 12px; flex-wrap: wrap; margin-top: 4px; color: var(--muted); font-size: .8rem; }
+.fixture-meta a { text-decoration: underline; }
+.fixture-meta [data-live="true"] { color: var(--green); font-weight: 650; }
+.fixture .result-head { border-top: 1px solid var(--line); }
+.fixture .result-grid { grid-template-columns: minmax(200px, 2fr) minmax(86px, .8fr) minmax(95px, .85fr) minmax(106px, .9fr) 32px; }
+.fixture .opportunity:first-child { border-top: 1px solid var(--line); }
+@media (max-width: 860px) {
+  .fixture .result-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) 32px; }
+  .fixture .opportunity:first-child { border-top: 1px solid var(--line); }
+  .sport-picker { max-width: min(100%, 245px); }
+}
 .results { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--surface); }
 .result-grid {
   display: grid; grid-template-columns: minmax(210px, 2.2fr) minmax(130px, 1.25fr) minmax(86px, .8fr) minmax(95px, .85fr) minmax(106px, .9fr) 32px;
@@ -128,12 +149,12 @@ summary { cursor: pointer; font-weight: 650; font-size: .875rem; }
 </header>
 <main class="shell">
   <header class="intro">
-    <div><h1>Live EV Scanner</h1><p class="subtitle">NBA moneylines, spreads, and totals on Polymarket’s international exchange</p></div>
+    <div><h1>Live EV Scanner</h1><p class="subtitle">Live and upcoming sports on Polymarket’s international exchange</p></div>
     <p id="status" class="status" data-state="waiting" role="status">Waiting for first scan</p>
   </header>
 
   <dl class="coverage" aria-label="Scan coverage">
-    <div class="stat"><dt>NBA games checked</dt><dd><span id="games">—</span><small id="live-games"></small></dd></div>
+    <div class="stat"><dt>Games listed</dt><dd><span id="games">—</span><small id="live-games"></small></dd></div>
     <div class="stat"><dt>NBA markets modeled</dt><dd id="modeled">—</dd></div>
     <div class="stat"><dt>Sides with usable quotes</dt><dd id="priced">—</dd></div>
     <div class="stat"><dt>Active markets cataloged</dt><dd><span id="cataloged">—</span><small id="catalog-status">Waiting</small></dd></div>
@@ -141,21 +162,17 @@ summary { cursor: pointer; font-weight: 650; font-size: .875rem; }
 
   <section aria-labelledby="results-title">
     <div class="section-heading">
-      <div><h2 id="results-title">Positive EV opportunities</h2><p class="section-meta" id="result-count">Ranked by screened EV</p></div>
+      <div><h2 id="results-title">Games &amp; opportunities</h2><p class="section-meta" id="result-count" aria-live="polite">Waiting for games</p></div>
+      <div class="controls"><label class="sr-only" for="sport-filter">Filter by sport or league</label><select class="sport-picker" id="sport-filter"><option value="">All sports</option></select>
       <fieldset class="filters" id="filters">
         <legend class="sr-only">Filter by game state</legend>
         <label><input class="sr-only" type="radio" name="phase" value="all" checked>All</label>
         <label><input class="sr-only" type="radio" name="phase" value="live">In play</label>
         <label><input class="sr-only" type="radio" name="phase" value="pregame">Pregame</label>
-      </fieldset>
+      </fieldset></div>
     </div>
-    <div class="results">
-      <div class="result-grid result-head" id="result-head" aria-hidden="true" hidden>
-        <span>Selection</span><span>Game state</span><span class="number-col">Model win %</span><span class="number-col">Avg. ask</span><span class="number-col">Screened EV</span><span></span>
-      </div>
-      <ol class="opportunities" id="opportunities" aria-label="Opportunities ranked by screened EV"></ol>
-      <div class="empty" id="empty"><h3 id="empty-title">Waiting for game data</h3><p id="empty-body">Opportunities appear after the first scan finishes.</p></div>
-    </div>
+    <div class="board" id="opportunities"></div>
+    <div class="empty results" id="empty"><h3 id="empty-title">Waiting for game data</h3><p id="empty-body">Games appear after a catalog scan finishes.</p></div>
   </section>
 
   <details class="warnings" id="warnings" hidden><summary id="warning-summary">Feed notices</summary><ul id="warning-list"></ul></details>
@@ -164,16 +181,36 @@ summary { cursor: pointer; font-weight: 650; font-size: .875rem; }
     <p><strong>Avg. ask</strong> is the estimated average entry price for $10 of orders before fees. Open a row to see the best ask, fee estimate, net EV, and quote age.</p>
     <p><strong>Screened EV</strong> applies fees and subtracts five percentage points from the model probability. Only positive screened estimates appear.</p>
     <p id="calibration">Waiting for calibration details.</p>
-    <p>In-play estimates use the score, period, and clock for NBA regular-season games before the final regulation minute. Catalog totals include markets outside NBA coverage. Research only.</p>
+    <p>The sports catalog lists recent and upcoming fixtures through the next 36 hours. In-play estimates use the score, period, and clock for NBA regular-season games before the final regulation minute. Games without an EV model show their market coverage and the latest status from Polymarket. Research only.</p>
   </details>
 </main>
 
+<template id="league-template">
+  <details class="league">
+    <summary><span data-field="league"></span><span class="league-count" data-field="count"></span></summary>
+    <div class="fixtures"></div>
+  </details>
+</template>
+<template id="fixture-template">
+  <article class="fixture">
+    <header class="fixture-header">
+      <div>
+        <h3 class="fixture-title" data-field="title"></h3>
+        <p class="fixture-meta"><span data-field="phase"></span><span data-field="markets"></span><a target="_blank" rel="noopener noreferrer" hidden>View markets</a></p>
+      </div>
+      <span class="game-status" data-field="status"></span>
+    </header>
+    <div class="result-grid result-head" aria-hidden="true" hidden>
+      <span>Selection</span><span class="number-col">Model probability</span><span class="number-col">Avg. ask</span><span class="number-col">Screened EV</span><span></span>
+    </div>
+    <ol class="opportunities" aria-label="Opportunities ranked by screened EV"></ol>
+  </article>
+</template>
 <template id="opportunity-template">
   <li class="opportunity">
     <div class="result-grid">
       <div class="selection"><span data-field="selection"></span><span class="secondary" data-field="market"></span></div>
-      <div class="game"><span class="matchup" data-field="matchup"></span><span class="secondary" data-field="game-state"></span></div>
-      <div class="number-col"><span class="metric-label">Model win %</span><span class="metric-value" data-field="probability"></span></div>
+      <div class="number-col"><span class="metric-label">Model probability</span><span class="metric-value" data-field="probability"></span></div>
       <div class="number-col"><span class="metric-label">Avg. ask</span><span class="metric-value" data-field="ask"></span></div>
       <div class="number-col"><span class="metric-label">Screened EV</span><span class="edge" data-field="edge"></span></div>
       <button type="button" class="details-toggle" aria-expanded="false"></button>
@@ -195,7 +232,10 @@ const time = new Intl.DateTimeFormat(undefined, {hour: 'numeric', minute: '2-dig
 const QUOTE_WINDOW_MS = 35000;
 const list = byId('opportunities');
 const template = byId('opportunity-template');
-const rows = new Map();
+const leagues = new Map();
+const fixtures = new Map();
+let lastLeagueOptions = '';
+let lastSelectedLeague = '';
 let snapshot = null;
 let loading = false;
 let unavailable = false;
@@ -240,15 +280,10 @@ function buildRow() {
 
 function updateRow(row, opportunity, now) {
   const age = Math.max(0, Math.floor((now - Date.parse(opportunity.quote_utc)) / 1000));
-  const gameState = opportunity.score
-    ? opportunity.score.join('–') + ' · Q' + opportunity.period + (opportunity.clock ? ' ' + opportunity.clock : '')
-    : 'Pregame';
   const label = opportunity.side + ' · ' + opportunity.matchup;
   const fields = {
     selection: opportunity.side,
     market: opportunity.market,
-    matchup: opportunity.matchup,
-    'game-state': gameState,
     probability: percent(opportunity.probability),
     ask: price(opportunity.ask),
     edge: percent(opportunity.screened_ev, true),
@@ -261,28 +296,166 @@ function updateRow(row, opportunity, now) {
   row.button.setAttribute('aria-label', 'Quote details for ' + label);
 }
 
-function renderRows(entries, now) {
+const NBA_LEAGUE = 'Basketball|NBA';
+
+function fieldsFor(node) {
+  return Object.fromEntries([...node.querySelectorAll('[data-field]')]
+    .map(element => [element.dataset.field, element]));
+}
+
+function syncOrder(parent, nodes) {
+  const wanted = new Set(nodes);
+  let position = parent.firstElementChild;
+  for (const node of nodes) {
+    if (node !== position) parent.insertBefore(node, position);
+    position = node.nextElementSibling;
+  }
+  for (const node of [...parent.children]) {
+    if (!wanted.has(node)) node.remove();
+  }
+}
+
+function renderRows(fixture, entries, now) {
+  const nodes = [];
   const wanted = new Set();
-  let position = list.firstElementChild;
   for (const entry of entries) {
     const key = entry.token_id || [entry.event, entry.market, entry.side].join('|');
     if (wanted.has(key)) continue;
     wanted.add(key);
-    let row = rows.get(key);
+    let row = fixture.rows.get(key);
     if (!row) {
       row = buildRow();
-      rows.set(key, row);
+      fixture.rows.set(key, row);
     }
     updateRow(row, entry, now);
-    if (row.node !== position) list.insertBefore(row.node, position);
-    position = row.node.nextElementSibling;
+    nodes.push(row.node);
   }
-  for (const [key, row] of rows) {
-    if (wanted.has(key)) continue;
-    row.node.remove();
-    rows.delete(key);
+  syncOrder(fixture.list, nodes);
+  for (const key of fixture.rows.keys()) {
+    if (!wanted.has(key)) fixture.rows.delete(key);
   }
-  return wanted.size;
+  fixture.columns.hidden = nodes.length === 0;
+  return nodes.length;
+}
+
+function mergeGames(state, fresh, now) {
+  const games = new Map();
+  const catalogAt = Date.parse(state.sports?.observed_utc);
+  const catalogRecent = now - catalogAt <= 180000;
+  for (const item of state.sports?.games || []) {
+    if (now - Date.parse(item.start_utc) > 18 * 3600000) continue;
+    const phase = Date.parse(item.start_utc) > now ? item.phase
+      : item.phase === 'live' && catalogRecent ? 'live' : 'unknown';
+    games.set(item.event, {...item, phase, entries: []});
+  }
+  if (fresh) {
+    for (const game of state.games || []) {
+      const earlier = games.get(game.event);
+      games.set(game.event, {...earlier, ...game, title: earlier?.title || game.title,
+        open_markets: Math.max(earlier?.open_markets || 0, game.open_markets || 0), entries: []});
+    }
+    for (const opportunity of state.opportunities || []) {
+      if (!isFresh(opportunity.quote_utc, now)) continue;
+      if (!games.has(opportunity.event)) {
+        games.set(opportunity.event, {event: opportunity.event, slug: opportunity.event,
+          title: opportunity.matchup, sport: 'Basketball', league: 'NBA', phase: opportunity.phase,
+          score_text: opportunity.score?.join('–'), period_text: opportunity.period ? 'Q' + opportunity.period : '',
+          clock_text: opportunity.clock, entries: []});
+      }
+      const game = games.get(opportunity.event);
+      if (opportunity.phase === 'pregame' && Date.parse(game.start_utc) <= now) continue;
+      game.entries.push(opportunity);
+    }
+  }
+  return games;
+}
+
+function leagueKey(game) {
+  return game.sport + '|' + game.league;
+}
+
+function leagueLabel(sport, league) {
+  return sport === league ? sport : sport + ' · ' + league;
+}
+
+function updateLeagueFilter(games) {
+  const select = byId('sport-filter');
+  const options = new Map();
+  for (const game of games.values()) options.set(leagueKey(game), leagueLabel(game.sport, game.league));
+  const ordered = [...options].sort((a, b) => a[1].localeCompare(b[1]));
+  const next = JSON.stringify(ordered);
+  if (next === lastLeagueOptions) return;
+  lastLeagueOptions = next;
+  const selected = select.value;
+  select.replaceChildren(new Option('All sports', ''), ...ordered.map(([key, label]) => new Option(label, key)));
+  if (options.has(selected)) select.value = selected;
+}
+
+function renderFixture(game, now) {
+  let view = fixtures.get(game.event);
+  if (!view) {
+    const node = byId('fixture-template').content.firstElementChild.cloneNode(true);
+    view = {node, fields: fieldsFor(node), list: node.querySelector('ol'), columns: node.querySelector('.result-head'),
+      link: node.querySelector('a'), rows: new Map()};
+    fixtures.set(game.event, view);
+  }
+  const {fields, link} = view;
+  setText(fields.title, game.title);
+  fields.phase.dataset.live = String(game.phase === 'live');
+  const tip = Date.parse(game.start_utc);
+  const displayTime = Number.isFinite(tip) ? new Date(tip).toLocaleString(undefined, {weekday:'short', hour:'numeric', minute:'2-digit', timeZoneName:'short'}) : '';
+  const phase = game.phase === 'live' ? ['In play', game.score_text, game.period_text, game.clock_text].filter(Boolean).join(' · ')
+    : game.phase === 'pregame' ? ['Pregame', displayTime].filter(Boolean).join(' · ') : 'Live status unavailable';
+  setText(fields.phase, phase);
+  setText(fields.markets, Number.isFinite(game.open_markets) ? count(game.open_markets) + ' open markets' : '');
+  link.hidden = !/^[a-z0-9][a-z0-9-]*$/.test(game.slug || '');
+  if (!link.hidden) link.href = 'https://polymarket.com/event/' + game.slug;
+  const displayed = renderRows(view, game.entries, now);
+  setText(fields.status, displayed ? count(displayed) + ' positive EV'
+    : leagueKey(game) !== NBA_LEAGUE ? 'EV model unavailable'
+    : game.priced_sides ? 'No positive EV' : game.modeled_markets ? 'Waiting for usable quotes' : 'Waiting for model or market data');
+  return view.node;
+}
+
+function renderBoard(games, now) {
+  updateLeagueFilter(games);
+  const phase = byId('filters').querySelector('input:checked').value;
+  const selected = byId('sport-filter').value;
+  const groups = new Map();
+  let totalGames = 0;
+  let positive = 0;
+  for (const game of games.values()) {
+    const key = leagueKey(game);
+    if ((selected && selected !== key) || (phase !== 'all' && phase !== game.phase)) continue;
+    if (!groups.has(key)) groups.set(key, {label:leagueLabel(game.sport, game.league), games:[], positive:0});
+    const group = groups.get(key);
+    group.games.push(game);
+    group.positive += game.entries.length;
+    totalGames++;
+    positive += game.entries.length;
+  }
+  const sections = [];
+  for (const [key, group] of [...groups].sort((a,b) => b[1].positive - a[1].positive || a[1].label.localeCompare(b[1].label))) {
+    let view = leagues.get(key);
+    if (!view) {
+      const node = byId('league-template').content.firstElementChild.cloneNode(true);
+      view = {node, fields: fieldsFor(node), body: node.querySelector('.fixtures')};
+      leagues.set(key, view);
+      node.open = Boolean(group.positive || key === NBA_LEAGUE || selected);
+    }
+    if (selected && selected !== lastSelectedLeague) view.node.open = true;
+    setText(view.fields.league, group.label);
+    setText(view.fields.count, count(group.games.length) + ' games' + (group.positive ? ' · ' + count(group.positive) + ' positive EV' : ''));
+    group.games.sort((a,b) => Number(b.phase === 'live') - Number(a.phase === 'live')
+      || Number(Boolean(b.entries.length)) - Number(Boolean(a.entries.length))
+      || String(a.start_utc || '').localeCompare(String(b.start_utc || '')));
+    syncOrder(view.body, group.games.map(game => renderFixture(game, now)));
+    sections.push(view.node);
+  }
+  syncOrder(list, sections);
+  lastSelectedLeague = selected;
+  for (const key of fixtures.keys()) if (!games.has(key)) fixtures.delete(key);
+  return {totalGames, positive};
 }
 
 function render() {
@@ -296,8 +469,9 @@ function render() {
   setText(status, unavailable ? 'Scanner temporarily unavailable' : fresh ? 'Updated ' + time.format(new Date(state.updated_utc))
     : state.updated_utc ? 'Waiting for a fresh scan' : 'Waiting for first scan');
 
-  setText(byId('games'), count(coverage.games));
-  setText(byId('live-games'), Number.isFinite(coverage.live_games) ? count(coverage.live_games) + ' in play' : '');
+  const games = mergeGames(state, fresh, now);
+  setText(byId('games'), count(games.size));
+  setText(byId('live-games'), count([...games.values()].filter(game => game.phase === 'live').length) + ' in play');
   setText(byId('modeled'), count(coverage.modeled_markets));
   setText(byId('priced'), count(coverage.priced_sides));
   setText(byId('cataloged'), count(catalog.cataloged));
@@ -310,7 +484,8 @@ function render() {
       '. Spread and total tests used simulated lines. Historical in-play returns remain unverified.'
     : 'In-play estimates require a loaded NBA calibration.');
 
-  const warnings = state.warnings || [];
+  const warnings = [...(state.warnings || [])];
+  if (state.sports?.status === 'partial') warnings.push('Polymarket sports catalog is incomplete.');
   byId('warnings').hidden = warnings.length === 0;
   setText(byId('warning-summary'), 'Feed notices (' + warnings.length + ')');
   const warningList = byId('warning-list');
@@ -324,19 +499,15 @@ function render() {
     }));
   }
 
-  const phase = byId('filters').querySelector('input:checked').value;
-  const usable = fresh ? (state.opportunities || []).filter(x => isFresh(x.quote_utc, now)) : [];
-  const visible = usable.filter(x => phase === 'all' || x.phase === phase);
-  const shown = renderRows(visible, now);
-  byId('result-head').hidden = shown === 0;
-  byId('empty').hidden = shown > 0;
-  setText(byId('result-count'), shown ? count(shown) + ' shown · ranked by screened EV' : 'Ranked by screened EV');
-
-  const hiddenByFilter = fresh && usable.length > 0 && shown === 0;
-  const title = unavailable ? 'Scanner temporarily unavailable' : !fresh ? 'Waiting for fresh data'
-    : hiddenByFilter ? 'No opportunities in this view' : 'No qualifying opportunities';
-  const description = unavailable ? 'The page keeps checking for data.' : !fresh ? 'Quotes appear after a fresh scan finishes.'
-    : hiddenByFilter ? 'Select All to see the other game states.' : 'No sides passed the price, depth, and EV filters.';
+  const {totalGames, positive} = renderBoard(games, now);
+  byId('empty').hidden = totalGames > 0;
+  setText(byId('result-count'), totalGames
+    ? count(totalGames) + ' games shown · ' + count(positive) + ' positive EV estimates'
+    : 'No games shown');
+  const title = games.size ? 'No games match these filters'
+    : unavailable ? 'Scanner temporarily unavailable' : 'Waiting for games';
+  const description = games.size ? 'Choose another sport or game state.'
+    : 'Games appear when the sports catalog or NBA feed returns a fresh slate.';
   setText(byId('empty-title'), title);
   setText(byId('empty-body'), description);
 }
@@ -358,6 +529,7 @@ async function refresh() {
 }
 
 byId('filters').addEventListener('change', render);
+byId('sport-filter').addEventListener('change', render);
 refresh();
 setInterval(refresh, 5000);
 setInterval(render, 1000);
