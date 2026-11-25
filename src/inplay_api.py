@@ -1,5 +1,6 @@
 """Independent live scanner so slow pregame model refreshes don't block quotes."""
 
+import re
 import threading
 import time
 from datetime import datetime, timezone
@@ -12,6 +13,8 @@ from .inplay_scan import MAX_AGE, SCORING_MARKETS, scan_catalog, scan_opportunit
 
 from .sports_inventory import scan_sports_events
 from .college_ev_scan import scan_college
+from .nfl_inplay_scan import scan_nfl
+from .game_board_feed import FINAL_SCORE_AGE, MAX_SCORE_AGE, follow_scores, scan_moneylines
 
 router = APIRouter()
 PAGE = Path(__file__).resolve().parents[1] / "static" / "inplay.html"
@@ -41,6 +44,20 @@ def rank_opportunities(rows, games, now):
     return ranked, picks
 
 
+def agrees_with_board(row, score, model_at):
+    if score.get("phase") == "final":
+        return False
+    if score.get("phase") != "live":
+        return True
+    if row["phase"] == "pregame":
+        return False
+    latest = utc(score.get("score_utc"))
+    if latest is None or model_at is None or latest < model_at:
+        return True
+    home_away = re.fullmatch(r"(\d+)\s*[-–]\s*(\d+)", score.get("score_text", ""))
+    return home_away is None or row.get("score") == [int(home_away[2]), int(home_away[1])]
+
+
 class ScanState:
     def __init__(self):
         self.lock = threading.Lock()
@@ -50,11 +67,14 @@ class ScanState:
         self.catalog = {"cataloged": 0, "open_order_books": 0, "status": "waiting"}
         self.sports = {"status": "waiting", "games": []}
         self.has_complete_sports_slate = False
+        self.moneyline_quotes = {}
+        self.scores = {}
+        self.nfl = {"updated_utc": None, "games": [], "opportunities": [], "warnings": []}
         self.college = {"updated_utc": None, "games": [], "opportunities": [], "warnings": []}
 
     def start(self):
         self.stop.clear()
-        for target in (self.live_loop, self.catalog_loop, self.sports_loop, self.college_loop):
+        for target in (self.live_loop, self.catalog_loop, self.sports_loop, self.college_loop, self.board_loop, self.score_loop, self.nfl_loop):
             worker = threading.Thread(target=target, daemon=True)
             worker.start()
             self.workers.append(worker)
@@ -113,21 +133,63 @@ class ScanState:
                     self.sports = {**self.sports, "status": "partial"}
             self.stop.wait(90)
 
+    def board_loop(self):
+        while not self.stop.is_set():
+            started = time.monotonic()
+            with self.lock:
+                games = self.sports.get("games", [])
+            result = scan_moneylines(games)
+            with self.lock:
+                self.moneyline_quotes = result
+                now = datetime.now(timezone.utc)
+                self.scores = {key: row for key, row in self.scores.items()
+                               if now - utc(row["score_utc"]) <= FINAL_SCORE_AGE}
+            self.stop.wait(max(3, 10 - (time.monotonic() - started)))
+
+    def update_score(self, game_id, update):
+        with self.lock:
+            if self.scores.get(game_id, {}).get("phase") != "final":
+                self.scores[game_id] = update
+
+    def score_loop(self):
+        follow_scores(self.stop, self.update_score)
+
     def read(self):
         with self.lock:
             snapshot, catalog, sports = dict(self.snapshot), dict(self.catalog), dict(self.sports)
-            college = dict(self.college)
+            college, nfl = dict(self.college), dict(self.nfl)
+            quotes, scores = dict(self.moneyline_quotes), dict(self.scores)
         now = datetime.now(timezone.utc)
         fresh, games, observations = [], [], []
-        for source in (snapshot, college):
+        for source in (snapshot, college, nfl):
             observed = utc(source.get("updated_utc"))
             if observed is None or not -5 <= (now - observed).total_seconds() <= MAX_AGE:
                 continue
             observations.append(observed)
-            games.extend(source.get("games", []))
+            games.extend({**game, "state_observed_utc": observed.isoformat()} for game in source.get("games", []))
             fresh.extend(source["opportunities"])
+        board = []
+        score_states = {}
+        for game in sports.get("games", []):
+            event = game["event"]
+            state = {}
+            score = scores.get(game.get("sports_game_id"))
+            if score:
+                max_age = FINAL_SCORE_AGE if score["phase"] == "final" else MAX_SCORE_AGE
+                if now - utc(score["score_utc"]) <= max_age:
+                    state = score
+                    score_states[event] = state
+            prices = [] if state.get("phase") == "final" else [
+                row for row in quotes.get(event, []) if -5 <= (now - utc(row["quote_utc"])).total_seconds() <= MAX_AGE
+            ]
+            if state or prices:
+                board.append({"event": event, "moneyline_quotes": prices, **state})
+        # A confirmed live/final transition invalidates stale pregame EV immediately.
+        times = {game["event"]: utc(game["state_observed_utc"]) for game in games}
+        fresh = [row for row in fresh if agrees_with_board(
+            row, score_states.get(row["event"], {}), times.get(row["event"]))]
         ranked, picks = rank_opportunities(fresh, games, now)
-        sports["games"] = [{k: v for k, v in game.items() if k != "college_markets"}
+        sports["games"] = [{k: v for k, v in game.items() if k not in ("college_markets", "moneyline", "sports_game_id")}
                            for game in sports.get("games", [])]
         coverage = dict(snapshot.get("coverage", {}))
         for key in ("modeled_markets", "priced_sides"):
@@ -135,8 +197,23 @@ class ScanState:
         return {**snapshot, "catalog": catalog, "sports": sports, "stale": not observations,
                 "updated_utc": max(observations).isoformat() if observations else snapshot.get("updated_utc"),
                 "coverage": coverage, "games": games, "opportunities": ranked, "top_picks": picks,
-                "warnings": sorted(set(snapshot.get("warnings", []) + college.get("warnings", []))),
+                "board": board,
+                "warnings": sorted(set(snapshot.get("warnings", []) + college.get("warnings", []) + nfl.get("warnings", []))),
                 "venue": "Polymarket CLOB (international)", "supported_markets": sorted(SCORING_MARKETS)}
+
+    def nfl_loop(self):
+        while not self.stop.is_set():
+            started = time.monotonic()
+            with self.lock:
+                fixtures = self.sports
+            try:
+                snapshot = scan_nfl(fixtures)
+            except Exception as exc:
+                snapshot = {"updated_utc": None, "games": [], "opportunities": [],
+                            "warnings": [f"NFL live scan unavailable: {type(exc).__name__}"]}
+            with self.lock:
+                self.nfl = snapshot
+            self.stop.wait(max(4, 15 - (time.monotonic() - started)))
 
     def college_loop(self):
         while not self.stop.is_set():
@@ -147,7 +224,7 @@ class ScanState:
                 snapshot = scan_college(fixtures)
             except Exception as exc:
                 snapshot = {"updated_utc": None, "games": [], "opportunities": [],
-                            "warnings": [f"College scan unavailable: {type(exc).__name__}"]}
+                            "warnings": [f"Pregame scan unavailable: {type(exc).__name__}"]}
             with self.lock:
                 self.college = snapshot
             self.stop.wait(max(4, 20 - (time.monotonic() - started)))

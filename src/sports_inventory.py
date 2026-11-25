@@ -3,10 +3,12 @@
 import re
 from datetime import datetime, timedelta, timezone
 
-from .inplay_scan import GAMMA, read_json, utc
+from .inplay_scan import GAMMA, array, read_json, utc
 from .college_sources import LEAGUES
+from .pro_ev_scan import PRO_SERIES
 
 SPORTS_TAG = 1
+PARTIAL_MONEYLINE = re.compile(r"first|second half|quarter|regulation only|excludes? overtime", re.I)
 SPORT_LABELS = {
     "american-football": "American football", "football": "American football",
     "nfl": "American football", "cfb": "American football", "ncaaf": "American football",
@@ -38,6 +40,23 @@ def league_index(records):
     return leagues
 
 
+def _moneyline(markets, start, active):
+    contracts = []
+    for market in markets:
+        scheduled = utc(market.get("gameStartTime"))
+        if (market.get("sportsMarketType") != "moneyline" or str(market.get("id")) not in active
+                or scheduled is None or abs(scheduled - start) > timedelta(minutes=30)
+                or PARTIAL_MONEYLINE.search(str(market.get("question") or ""))):
+            continue
+        labels = array(market.get("outcomes"))
+        ids = [str(token) for token in array(market.get("clobTokenIds"))]
+        if (len(labels) == len(ids) == 2 and len(set(ids)) == 2 and all(token.isdigit() for token in ids)
+                and all(isinstance(label, str) and label.strip().lower() not in ("", "yes", "no") for label in labels)
+                and len({label.strip().lower() for label in labels}) == 2):
+            contracts.append(list(zip(labels, ids)))
+    return contracts[0] if len(contracts) == 1 else []
+
+
 def _fixture(event, now, leagues):
     slug = event.get("slug") or ""
     if not SAFE_SLUG.fullmatch(slug) or event.get("closed") or event.get("ended"):
@@ -57,6 +76,7 @@ def _fixture(event, now, leagues):
     series_slug = event.get("seriesSlug") or (series[0].get("slug") if series else "")
     series_id = str(series[0].get("id") or "") if series else ""
     college = COLLEGE_SERIES.get(series_id)
+    pro = PRO_SERIES.get(series_id)
     league = (leagues.get(series_id) or tags.get(series_slug) or
               (series[0].get("title") if series else None) or series_slug)
     sport = next((label for tag, label in SPORT_LABELS.items() if tag != "football" and tag in tags),
@@ -77,9 +97,11 @@ def _fixture(event, now, leagues):
             "score_text": str(event.get("score") or "") if phase == "live" else "",
             "clock_text": str(event.get("elapsed") or "") if phase == "live" else "",
             "period_text": str(event.get("period") or "") if phase == "live" else "",
-            "open_market_ids": active, "college": college,
+            "open_market_ids": active, "college": college, "pro": pro,
+            "moneyline": _moneyline(markets, start, active) if slug == key else [],
+            "sports_game_id": event.get("gameId") if type(event.get("gameId")) is int else None,
             "college_markets": [{field: market.get(field) for field in COLLEGE_FIELDS}
-                                for market in markets if college and str(market.get("id")) in active
+                                for market in markets if (college or pro) and str(market.get("id")) in active
                                 and market.get("sportsMarketType") in ("moneyline", "spreads", "totals")]}
 
 
@@ -97,7 +119,9 @@ def add_fixtures(fixtures, events, now, leagues):
         preferred = row if row["slug"] == key else previous
         other = previous if preferred is row else row
         preferred["open_market_ids"].update(other["open_market_ids"])
-        if other["college"] == preferred["college"] and other["college"]:
+        if preferred["sports_game_id"] is None:
+            preferred["sports_game_id"] = other["sports_game_id"]
+        if (other["college"] or other["pro"]) == (preferred["college"] or preferred["pro"]):
             preferred["college_markets"] = list({market["id"]: market for market in
                                                  [*other["college_markets"], *preferred["college_markets"]]}.values())
         if preferred["phase"] == "unknown" and other["phase"] == "live":
