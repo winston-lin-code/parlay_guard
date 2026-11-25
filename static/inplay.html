@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live EV Scanner | Parlay Guard</title>
+<style>
+:root{color-scheme:dark;--bg:#10171b;--panel:#172128;--ink:#eef4f2;--muted:#a3b8b9;--line:#30424c;--green:#92ebbc;--amber:#e8c88a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,sans-serif}
+main{max-width:1200px;margin:auto;padding:30px 24px 60px}
+nav{display:flex;gap:24px;padding-bottom:28px}a{color:var(--green)}
+h1{font-size:clamp(28px,5vw,42px);line-height:1.1;margin:0 0 10px}h2{font-size:17px;margin:0}
+p{margin:8px 0;color:var(--muted)}
+.status{color:var(--amber);min-height:24px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:24px 0}
+.card,.results{border:1px solid var(--line);background:var(--panel);border-radius:10px}
+.card{padding:13px 16px}.card span{display:block;color:var(--muted)}.card b{font-size:22px}
+.results header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;flex-wrap:wrap}
+select{background:var(--bg);color:var(--ink);border:1px solid var(--line);padding:7px;border-radius:5px}
+.scroll{overflow-x:auto}table{border-collapse:collapse;width:100%;white-space:nowrap}
+th,td{text-align:left;padding:10px 12px;border-top:1px solid var(--line);font-variant-numeric:tabular-nums}
+th{font-size:12px;color:var(--muted)}td strong{display:block}td small{display:block;color:var(--muted)}.positive{color:var(--green)}
+#empty,#warnings{margin:12px 16px}#warnings{color:var(--amber)}footer{margin-top:18px;font-size:13px}
+</style>
+</head>
+<body>
+<main>
+<nav><a href="/">Parlay Guard</a><a href="/portfolio">Multi-Sport Portfolio</a></nav>
+<h1>Live EV Scanner</h1>
+<p>Polymarket CLOB · NBA full-game moneylines, spreads and totals</p>
+<p id="status" class="status" role="status">Waiting for the first scan…</p>
+<div class="cards">
+<div class="card"><span>Active markets cataloged</span><b id="cataloged">—</b><span id="catalogStatus">Waiting</span></div>
+<div class="card"><span>NBA games checked</span><b id="games">—</b><span id="liveGames"></span></div>
+<div class="card"><span>Markets modeled</span><b id="modeled">—</b></div>
+<div class="card"><span>Sides with usable quotes</span><b id="priced">—</b></div>
+</div>
+<section class="results" aria-labelledby="results">
+<header><h2 id="results">Positive EV estimates</h2><label>Game state <select id="phase"><option value="all">All</option><option value="live">In play</option><option value="pregame">Pregame</option></select></label></header>
+<div class="scroll"><table id="quotes" hidden>
+<thead><tr><th>Game / State</th><th>Market / Side</th><th>Model probability</th><th>Best ask</th><th>Depth-adjusted ask</th><th>Fee / Share</th><th>Net EV</th><th>Screened EV</th><th>Quote age</th></tr></thead>
+<tbody id="rows"></tbody></table></div>
+<p id="empty">Waiting for game data and order books.</p>
+<p id="warnings" hidden></p>
+</section>
+<footer>
+<p>The screen estimates the return on $10 of order-book depth before fees. Screened EV applies fees and subtracts five percentage points from the model probability. In-play estimates use the score, period and clock.</p>
+<p id="calibration">Waiting for calibration details.</p>
+<p>The catalog includes markets outside NBA coverage. In-play coverage includes NBA regular-season full-game moneylines and half-point spreads and totals through regulation, up to the final minute. Delayed feeds, closing markets and changing depth can affect quotes. Research only.</p>
+</footer>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const count = new Intl.NumberFormat();
+const pct = value => (100 * value).toFixed(1) + '%';
+const price = value => '$' + value.toFixed(3);
+let snapshot = null;
+let loading = false;
+
+function cell(row, text, detail) {
+  const td = row.insertCell();
+  td.textContent = text;
+  if (detail) {
+    const small = document.createElement('small');
+    small.textContent = detail;
+    td.append(small);
+  }
+  return td;
+}
+
+function render() {
+  if (!snapshot) return;
+  const {updated_utc, catalog, coverage, warnings} = snapshot;
+  const age = (Date.now() - Date.parse(updated_utc)) / 1000;
+  const stale = snapshot.stale || !Number.isFinite(age) || age > 35;
+  $('status').textContent = stale ? 'Waiting for a fresh scan.'
+    : 'Last refreshed ' + new Date(updated_utc).toLocaleTimeString();
+  $('cataloged').textContent = count.format(catalog.cataloged);
+  $('catalogStatus').textContent = ({complete:'Catalog pass complete', scanning:'Catalog scan in progress',
+    partial:'Partial catalog', waiting:'Waiting'})[catalog.status] || 'Unknown';
+  $('games').textContent = coverage.games ?? '—';
+  $('liveGames').textContent = coverage.live_games == null ? '' : coverage.live_games + ' in play';
+  $('modeled').textContent = coverage.modeled_markets ?? '—';
+  $('priced').textContent = coverage.priced_sides ?? '—';
+  const validation = snapshot.calibration;
+  $('calibration').textContent = validation
+    ? 'Calibrated on ' + validation.calibration_season + ' NBA play-by-play. Tested on '
+      + count.format(validation.holdout_games) + ' games from ' + validation.holdout_season
+      + '. Spread and total tests use simulated lines. Historical in-play order-book returns remain unverified.'
+    : 'In-play estimates require a loaded NBA calibration.';
+  $('warnings').hidden = !warnings.length;
+  $('warnings').textContent = warnings.join(' · ');
+  const phase = $('phase').value;
+  const entries = stale ? [] : snapshot.opportunities.filter(x =>
+    (phase === 'all' || phase === x.phase) && Date.now() - Date.parse(x.quote_utc) <= 35000);
+  $('quotes').hidden = entries.length === 0;
+  $('empty').hidden = entries.length > 0;
+  $('empty').textContent = stale ? 'Quotes appear when a fresh scan finishes.'
+    : 'No opportunities in this view passed the depth, freshness and EV screen.';
+  $('rows').replaceChildren();
+  for (const x of entries) {
+    const row = $('rows').insertRow();
+    const state = x.score ? x.score.join('–') + ' · Q' + x.period + ' ' + x.clock : 'Pregame';
+    cell(row,x.matchup,state); cell(row,x.side,x.market);
+    cell(row,pct(x.probability)); cell(row,price(x.best_ask)); cell(row,price(x.ask)); cell(row,price(x.fee_per_share));
+    cell(row,pct(x.ev)); cell(row,pct(x.screened_ev)).className = 'positive';
+    cell(row,Math.max(0, Math.floor((Date.now() - Date.parse(x.quote_utc))/1000)) + 's');
+  }
+}
+
+async function refresh() {
+  if (loading) return;
+  loading = true;
+  try {
+    const response = await fetch('/api/inplay/opportunities', {cache:'no-store', signal: AbortSignal.timeout(8000)});
+    if (!response.ok) throw Error(response.status);
+    snapshot = await response.json();
+  } catch {
+    if (snapshot) snapshot.stale = true;
+    $('status').textContent = 'The scanner is temporarily unavailable.';
+  } finally {
+    render();
+    loading = false;
+  }
+}
+$('phase').addEventListener('change',render);
+refresh();
+setInterval(refresh,5000);
+</script>
+</body>
+</html>
