@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from .inplay_scan import GAMMA, read_json, utc
 from .college_sources import LEAGUES
+from .pro_ev_scan import PRO_SERIES
 
 SPORTS_TAG = 1
 SPORT_LABELS = {
@@ -57,6 +58,7 @@ def _fixture(event, now, leagues):
     series_slug = event.get("seriesSlug") or (series[0].get("slug") if series else "")
     series_id = str(series[0].get("id") or "") if series else ""
     college = COLLEGE_SERIES.get(series_id)
+    pro = PRO_SERIES.get(series_id)
     league = (leagues.get(series_id) or tags.get(series_slug) or
               (series[0].get("title") if series else None) or series_slug)
     sport = next((label for tag, label in SPORT_LABELS.items() if tag != "football" and tag in tags),
@@ -77,9 +79,9 @@ def _fixture(event, now, leagues):
             "score_text": str(event.get("score") or "") if phase == "live" else "",
             "clock_text": str(event.get("elapsed") or "") if phase == "live" else "",
             "period_text": str(event.get("period") or "") if phase == "live" else "",
-            "open_market_ids": active, "college": college,
+            "open_market_ids": active, "college": college, "pro": pro,
             "college_markets": [{field: market.get(field) for field in COLLEGE_FIELDS}
-                                for market in markets if college and str(market.get("id")) in active
+                                for market in markets if (college or pro) and str(market.get("id")) in active
                                 and market.get("sportsMarketType") in ("moneyline", "spreads", "totals")]}
 
 
@@ -97,7 +99,7 @@ def add_fixtures(fixtures, events, now, leagues):
         preferred = row if row["slug"] == key else previous
         other = previous if preferred is row else row
         preferred["open_market_ids"].update(other["open_market_ids"])
-        if other["college"] == preferred["college"] and other["college"]:
+        if (other["college"] or other["pro"]) == (preferred["college"] or preferred["pro"]):
             preferred["college_markets"] = list({market["id"]: market for market in
                                                  [*other["college_markets"], *preferred["college_markets"]]}.values())
         if preferred["phase"] == "unknown" and other["phase"] == "live":

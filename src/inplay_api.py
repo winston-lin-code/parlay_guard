@@ -147,7 +147,7 @@ class ScanState:
                 snapshot = scan_college(fixtures)
             except Exception as exc:
                 snapshot = {"updated_utc": None, "games": [], "opportunities": [],
-                            "warnings": [f"College scan unavailable: {type(exc).__name__}"]}
+                            "warnings": [f"Pregame scan unavailable: {type(exc).__name__}"]}
             with self.lock:
                 self.college = snapshot
             self.stop.wait(max(4, 20 - (time.monotonic() - started)))
