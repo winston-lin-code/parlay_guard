@@ -10,6 +10,9 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from .inplay_scan import MAX_AGE, SCORING_MARKETS, scan_catalog, scan_opportunities, utc
 
+from .sports_inventory import scan_sports_events
+from .college_ev_scan import scan_college
+
 router = APIRouter()
 PAGE = Path(__file__).resolve().parents[1] / "static" / "inplay.html"
 
@@ -21,10 +24,13 @@ class ScanState:
         self.workers = []
         self.snapshot = {"updated_utc": None, "coverage": {}, "opportunities": [], "warnings": []}
         self.catalog = {"cataloged": 0, "open_order_books": 0, "status": "waiting"}
+        self.sports = {"status": "waiting", "games": []}
+        self.has_complete_sports_slate = False
+        self.college = {"updated_utc": None, "games": [], "opportunities": [], "warnings": []}
 
     def start(self):
         self.stop.clear()
-        for target in (self.live_loop, self.catalog_loop):
+        for target in (self.live_loop, self.catalog_loop, self.sports_loop, self.college_loop):
             worker = threading.Thread(target=target, daemon=True)
             worker.start()
             self.workers.append(worker)
@@ -60,20 +66,69 @@ class ScanState:
                     self.catalog = {**self.catalog, "status": "partial"}
             self.stop.wait(15 * 60)
 
+    def update_sports_progress(self, value):
+        with self.lock:
+            # Keep the last full slate visible while the new pass is incomplete.
+            if not self.has_complete_sports_slate:
+                self.sports = value
+
+    def sports_loop(self):
+        while not self.stop.is_set():
+            try:
+                value = scan_sports_events(self.stop, self.update_sports_progress)
+                with self.lock:
+                    if value["status"] == "complete":
+                        self.has_complete_sports_slate = True
+                        self.sports = value
+                    elif value["games"] and not self.has_complete_sports_slate:
+                        self.sports = value
+                    else:
+                        self.sports = {**self.sports, "status": "partial"}
+            except Exception:
+                with self.lock:
+                    self.sports = {**self.sports, "status": "partial"}
+            self.stop.wait(90)
+
     def read(self):
         with self.lock:
-            snapshot, catalog = dict(self.snapshot), dict(self.catalog)
+            snapshot, catalog, sports = dict(self.snapshot), dict(self.catalog), dict(self.sports)
+            college = dict(self.college)
         now = datetime.now(timezone.utc)
-        observed = utc(snapshot.get("updated_utc"))
-        stale = observed is None or not -5 <= (now - observed).total_seconds() <= MAX_AGE
-        fresh = []
-        if not stale:
-            for row in snapshot["opportunities"]:
+        fresh, games, observations = [], [], []
+        for source in (snapshot, college):
+            observed = utc(source.get("updated_utc"))
+            if observed is None or not -5 <= (now - observed).total_seconds() <= MAX_AGE:
+                continue
+            observations.append(observed)
+            games.extend(source.get("games", []))
+            for row in source["opportunities"]:
                 quote = utc(row.get("quote_utc"))
                 if quote is not None and -5 <= (now - quote).total_seconds() <= MAX_AGE:
                     fresh.append(row)
-        return {**snapshot, "catalog": catalog, "stale": stale, "opportunities": fresh,
+        sports["games"] = [{k: v for k, v in game.items() if k != "college_markets"}
+                           for game in sports.get("games", [])]
+        coverage = dict(snapshot.get("coverage", {}))
+        for key in ("modeled_markets", "priced_sides"):
+            coverage[key] = sum(game.get(key, 0) for game in games)
+        return {**snapshot, "catalog": catalog, "sports": sports, "stale": not observations,
+                "updated_utc": max(observations).isoformat() if observations else snapshot.get("updated_utc"),
+                "coverage": coverage, "games": games, "opportunities": sorted(fresh, key=lambda row: -row["screened_ev"]),
+                "warnings": sorted(set(snapshot.get("warnings", []) + college.get("warnings", []))),
                 "venue": "Polymarket CLOB (international)", "supported_markets": sorted(SCORING_MARKETS)}
+
+    def college_loop(self):
+        while not self.stop.is_set():
+            started = time.monotonic()
+            with self.lock:
+                fixtures = self.sports
+            try:
+                snapshot = scan_college(fixtures)
+            except Exception as exc:
+                snapshot = {"updated_utc": None, "games": [], "opportunities": [],
+                            "warnings": [f"College scan unavailable: {type(exc).__name__}"]}
+            with self.lock:
+                self.college = snapshot
+            self.stop.wait(max(4, 20 - (time.monotonic() - started)))
 
 
 scanner = ScanState()
