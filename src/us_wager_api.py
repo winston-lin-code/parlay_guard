@@ -14,10 +14,9 @@ from pydantic import BaseModel, Field
 
 from .inplay_api import scanner
 from .inplay_scan import utc
-from .us_wager import WagerError, decimal, match_contract, public, quote_order
+from .us_wager import BOOK_MAX_AGE, WagerError, decimal, match_contract, public, quote_order
 
 router = APIRouter(prefix="/api/inplay/us-wager")
-PREVIEW_SECONDS = 15
 
 
 class Selection(BaseModel):
@@ -74,7 +73,7 @@ def current_order(selection):
     pick, start = active_pick(selection)
     event = public("/v1/events/slug/" + selection.event)["event"]
     contract, long = match_contract(pick, event, start)
-    book = public("/v1/markets/" + contract["slug"] + "/book")["marketData"]
+    book = public("/v1/markets/" + contract["slug"] + "/book", fresh_book=True)["marketData"]
     current, current_start = active_pick(selection)
     keys = ("phase", "score", "market", "market_type", "line", "side", "half_payout_tie")
     if start != current_start or any(current.get(key) != pick.get(key) for key in keys):
@@ -123,7 +122,7 @@ def preview(selection: Selection, x_order_token: str = Header(default=""), origi
                 or decimal(response.get("price", {}).get("value")) != decimal(body["price"]["value"])
                 or response.get("state") in ("ORDER_STATE_REJECTED", "ORDER_STATE_CANCELED")):
             raise WagerError("Exchange preview did not confirm the same order.")
-        expires = utc(summary["quote_utc"]).timestamp() + PREVIEW_SECONDS
+        expires = utc(summary["quote_utc"]).timestamp() + BOOK_MAX_AGE
         now = datetime.now(timezone.utc).timestamp()
         if now >= expires:
             raise WagerError("The quote expired while previewing. Request a fresh quote.")

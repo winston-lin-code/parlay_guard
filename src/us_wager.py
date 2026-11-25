@@ -2,6 +2,7 @@
 
 import re
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
+from secrets import token_hex
 
 import requests
 
@@ -12,6 +13,8 @@ SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,159}")
 ONE = Decimal(1)
 CENT = Decimal(".01")
 STANDARD_FEE = Decimal(".0695")
+BOOK_MAX_AGE = 15
+EVENT_CACHE_MAX_AGE = 30
 
 
 class WagerError(ValueError):
@@ -28,13 +31,19 @@ def decimal(value):
     raise WagerError("The exchange did not provide a valid price or quantity.")
 
 
-def public(path):
-    response = requests.get(GATEWAY + path, timeout=(4, 6), headers={"Cache-Control": "no-cache"})
+def public(path, *, fresh_book=False):
+    # Event metadata has a normal 30-second CDN lifetime. The book must be newer:
+    # the gateway can serve a cached book even with a no-cache request header.
+    options = {"params": {"_": token_hex(8)}} if fresh_book else {}
+    response = requests.get(GATEWAY + path, timeout=(4, 6), headers={"Cache-Control": "no-cache"}, **options)
     if response.status_code == 404:
         raise WagerError("The matching Polymarket US listing is unavailable.")
     response.raise_for_status()
-    if float(response.headers.get("Age", 0)) > 10:
-        raise WagerError("Polymarket US returned cached data. Refresh the quote.")
+    max_age = BOOK_MAX_AGE if fresh_book else EVENT_CACHE_MAX_AGE
+    if float(response.headers.get("Age", 0)) > max_age:
+        if fresh_book:
+            raise WagerError("Polymarket US returned a stale order book. Get a new US quote.")
+        raise WagerError("The Polymarket US listing is out of date. Get a new US quote.")
     return response.json()
 
 
@@ -104,9 +113,12 @@ def match_contract(pick, event, start):
 def quote_order(pick, contract, long, quantity, book, now):
     slug = contract["slug"]
     timestamp = utc(book.get("transactTime"))
-    if (book.get("marketSlug") != slug or book.get("state") != "MARKET_STATE_OPEN" or timestamp is None
-            or not -5 <= (now - timestamp).total_seconds() <= 15):
-        raise WagerError("A fresh, open Polymarket US order book is required.")
+    if book.get("marketSlug") != slug:
+        raise WagerError("Polymarket US did not return the book for the selected contract.")
+    if book.get("state") != "MARKET_STATE_OPEN":
+        raise WagerError("This Polymarket US contract is closed or paused.")
+    if timestamp is None or not -5 <= (now - timestamp).total_seconds() <= BOOK_MAX_AGE:
+        raise WagerError("Polymarket US has no fresh price for this contract. Get a new US quote.")
     if quantity < decimal(contract.get("minimumTradeQty")):
         raise WagerError("This quantity is below the exchange minimum.")
     levels = []
