@@ -148,9 +148,12 @@ def probability_frame(game, projection, metrics):
     return home_win, NormalDist(margin, margin_sd), NormalDist(total, total_sd)
 
 
-def market_probabilities(market, game, frame):
+def market_probabilities(market, game, frame, *, resolve_team=None):
     kind = market.get("sportsMarketType")
     home, away = game["home"].lower(), game["away"].lower()
+    if resolve_team is None:
+        def resolve_team(label):
+            return match_team(label, away, home)
     labels = array(market.get("outcomes"))
     tokens = array(market.get("clobTokenIds"))
     if (kind not in SCORING_MARKETS or len(labels) != 2 or len(tokens) != 2
@@ -161,7 +164,7 @@ def market_probabilities(market, game, frame):
     if re.search(r"regulation only|first (?:half|quarter)|second half|quarter winner|excludes? overtime", rules, re.I):
         return None
     if kind == "moneyline":
-        sides = [match_team(label, away, home) for label in labels]
+        sides = [resolve_team(label) for label in labels]
         if set(sides) != {home, away}:
             return None
         p_first = frame[0] if sides[0] == home else 1 - frame[0]
@@ -171,9 +174,9 @@ def market_probabilities(market, game, frame):
             return None
         if kind == "spreads":
             match = re.fullmatch(r"Spread:\s*(.+?)\s*\(([+-]?\d+(?:\.\d+)?)\)", question, re.I)
-            sides = [match_team(label, away, home) for label in labels]
+            sides = [resolve_team(label) for label in labels]
             if (not match or set(sides) != {home, away}
-                    or match_team(match[1], away, home) != sides[0] or float(match[2]) != line):
+                    or resolve_team(match[1]) != sides[0] or float(match[2]) != line):
                 return None
             p_first = 1 - frame[1].cdf(-line) if sides[0] == home else frame[1].cdf(line)
         else:

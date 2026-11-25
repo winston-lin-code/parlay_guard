@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from .inplay_scan import GAMMA, read_json, utc
+from .college_sources import LEAGUES
 
 SPORTS_TAG = 1
 SPORT_LABELS = {
@@ -20,6 +21,9 @@ DATED_FIXTURE = re.compile(r"^(.+?-\d{4}-\d{2}-\d{2})(?:-|$)")
 PAST = timedelta(hours=18)
 AHEAD = timedelta(hours=36)
 MAX_PAGES = 100
+COLLEGE_SERIES = {data["series"]: sport for sport, data in LEAGUES.items()}
+COLLEGE_FIELDS = ("id", "question", "outcomes", "clobTokenIds", "line", "sportsMarketType",
+                  "feesEnabled", "feeSchedule", "gameStartTime", "description")
 
 
 def league_index(records):
@@ -52,6 +56,7 @@ def _fixture(event, now, leagues):
     series = event.get("series") or []
     series_slug = event.get("seriesSlug") or (series[0].get("slug") if series else "")
     series_id = str(series[0].get("id") or "") if series else ""
+    college = COLLEGE_SERIES.get(series_id)
     league = (leagues.get(series_id) or tags.get(series_slug) or
               (series[0].get("title") if series else None) or series_slug)
     sport = next((label for tag, label in SPORT_LABELS.items() if tag != "football" and tag in tags),
@@ -72,7 +77,10 @@ def _fixture(event, now, leagues):
             "score_text": str(event.get("score") or "") if phase == "live" else "",
             "clock_text": str(event.get("elapsed") or "") if phase == "live" else "",
             "period_text": str(event.get("period") or "") if phase == "live" else "",
-            "open_market_ids": active}
+            "open_market_ids": active, "college": college,
+            "college_markets": [{field: market.get(field) for field in COLLEGE_FIELDS}
+                                for market in markets if college and str(market.get("id")) in active
+                                and market.get("sportsMarketType") in ("moneyline", "spreads", "totals")]}
 
 
 def add_fixtures(fixtures, events, now, leagues):
@@ -89,6 +97,9 @@ def add_fixtures(fixtures, events, now, leagues):
         preferred = row if row["slug"] == key else previous
         other = previous if preferred is row else row
         preferred["open_market_ids"].update(other["open_market_ids"])
+        if other["college"] == preferred["college"] and other["college"]:
+            preferred["college_markets"] = list({market["id"]: market for market in
+                                                 [*other["college_markets"], *preferred["college_markets"]]}.values())
         if preferred["phase"] == "unknown" and other["phase"] == "live":
             for field in ("phase", "score_text", "clock_text", "period_text"):
                 preferred[field] = other[field]

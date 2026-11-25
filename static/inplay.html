@@ -155,7 +155,7 @@ summary { cursor: pointer; font-weight: 650; font-size: .875rem; }
 
   <dl class="coverage" aria-label="Scan coverage">
     <div class="stat"><dt>Games listed</dt><dd><span id="games">—</span><small id="live-games"></small></dd></div>
-    <div class="stat"><dt>NBA markets modeled</dt><dd id="modeled">—</dd></div>
+    <div class="stat"><dt>Markets modeled</dt><dd id="modeled">—</dd></div>
     <div class="stat"><dt>Sides with usable quotes</dt><dd id="priced">—</dd></div>
     <div class="stat"><dt>Active markets cataloged</dt><dd><span id="cataloged">—</span><small id="catalog-status">Waiting</small></dd></div>
   </dl>
@@ -181,7 +181,7 @@ summary { cursor: pointer; font-weight: 650; font-size: .875rem; }
     <p><strong>Avg. ask</strong> is the estimated average entry price for $10 of orders before fees. Open a row to see the best ask, fee estimate, net EV, and quote age.</p>
     <p><strong>Screened EV</strong> applies fees and subtracts five percentage points from the model probability. Only positive screened estimates appear.</p>
     <p id="calibration">Waiting for calibration details.</p>
-    <p>The sports catalog lists recent and upcoming fixtures through the next 36 hours. In-play estimates use the score, period, and clock for NBA regular-season games before the final regulation minute. Games without an EV model show their market coverage and the latest status from Polymarket. Research only.</p>
+    <p>The sports catalog lists recent and upcoming fixtures through the next 36 hours. In-play estimates cover NBA regular-season games before the final regulation minute. College estimates cover pregame markets that passed held-out probability checks. Simulated spreads and totals were used to test college probability estimates. Research only.</p>
   </details>
 </main>
 
@@ -412,8 +412,10 @@ function renderFixture(game, now) {
   if (!link.hidden) link.href = 'https://polymarket.com/event/' + game.slug;
   const displayed = renderRows(view, game.entries, now);
   setText(fields.status, displayed ? count(displayed) + ' positive EV'
-    : leagueKey(game) !== NBA_LEAGUE ? 'EV model unavailable'
-    : game.priced_sides ? 'No positive EV' : game.modeled_markets ? 'Waiting for usable quotes' : 'Waiting for model or market data');
+    : game.priced_sides ? 'No positive EV' : game.modeled_markets ? 'Waiting for usable quotes'
+    : game.college && game.phase === 'live' ? 'College EV available before tipoff only'
+    : leagueKey(game) !== NBA_LEAGUE && !game.college ? 'EV model unavailable'
+    : 'Waiting for model or market data');
   return view.node;
 }
 

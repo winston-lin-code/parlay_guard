@@ -73,7 +73,8 @@ def parse_schedule(df, sport, now=None, season_hint=None):
         except (ValueError,TypeError,OverflowError):continue
         if ts >= now or hs == aws or hs < 0 or aws < 0:continue
         out.append({'game_id':game_id,'date':ts.isoformat(),'season':season,'home_id':home,
-                    'away_id':away,'home_win':int(hs>aws),'neutral':neutral})
+                    'away_id':away,'home_win':int(hs>aws),'neutral':neutral,
+                    'home_points':hs,'away_points':aws})
     return sorted({x['game_id']:x for x in out}.values(),key=lambda x:(x['date'],x['game_id']))
 
 
