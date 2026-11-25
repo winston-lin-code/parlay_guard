@@ -95,3 +95,54 @@ def test_preview_and_confirm_is_opt_in_and_single_use(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "current_order", lambda _: ({**body, "price": {"value": ".30"}}, dict(summary)))
     assert browser.post(route + "confirm", json={"ticket": ticket}, headers=headers).status_code == 409
     assert submissions == [body]
+
+
+def test_preview_uses_cached_listing_with_separate_fresh_book(monkeypatch):
+    import requests
+
+    from src import us_wager
+
+    now = datetime.now(timezone.utc)
+    start = now + timedelta(hours=1)
+    contract = {**CONTRACT, "gameStartTime": start.isoformat()}
+    event = {**US_EVENT, "markets": [contract]}
+    row = {**PICK, "phase": "pregame", "token_id": "123", "screened_ev": .2}
+    game = {"event": EVENT, "phase": "pregame", "start_utc": start.isoformat()}
+    monkeypatch.setattr(api.scanner, "read", lambda: {"games": [game], "opportunities": [row]})
+
+    calls = []
+
+    class Response:
+        status_code = 200
+
+        def __init__(self, age, data):
+            self.headers = {"Age": str(age)}
+            self.data = data
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self.data
+
+    def get(url, **options):
+        calls.append(options)
+        if "/events/" in url:
+            assert "params" not in options
+            return Response(23, {"event": event})
+        assert options["params"]["_"]
+        return Response(0, {"marketData": {
+            "marketSlug": MARKET, "state": "MARKET_STATE_OPEN", "transactTime": now.isoformat(),
+            "bids": [{"px": {"value": ".40", "currency": "USD"}, "qty": "10"}],
+        }})
+
+    monkeypatch.setattr(requests, "get", get)
+    selection = api.Selection(event=EVENT, token_id="123", quantity=3)
+    _, quote = api.current_order(selection)
+    assert quote["limit"] == "0.60"
+    api.current_order(selection)
+    assert calls[1]["params"]["_"] != calls[3]["params"]["_"]
+
+    monkeypatch.setattr(requests, "get", lambda *_, **kwargs: Response(23, {}))
+    with pytest.raises(WagerError, match="stale order book"):
+        us_wager.public("/v1/markets/" + MARKET + "/book", fresh_book=True)
