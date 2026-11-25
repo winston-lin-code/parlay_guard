@@ -19,6 +19,7 @@ ARCHIVE_STRATEGY=ROOT/'models/parlay_comparison.html'
 
 from .live_dashboard_api import router as live_dashboard_router
 from .deploy_artifacts import restore_forecast_inputs
+from .inplay_api import router as inplay_router, scanner as inplay_scanner
 
 class LiveState:
     def __init__(self):
@@ -123,12 +124,18 @@ state=LiveState()
 @asynccontextmanager
 async def lifespan(app:FastAPI):
     restore_forecast_inputs(ROOT)
-    if os.getenv('PG_DISABLE_AUTO_REFRESH')!='1':state.start()
-    yield
-    state.shutdown()
+    if os.getenv('PG_DISABLE_AUTO_REFRESH') != '1':
+        state.start()
+        inplay_scanner.start()
+    try:
+        yield
+    finally:
+        inplay_scanner.shutdown()
+        state.shutdown()
 
 app=FastAPI(title='Parlay Guard Auto Live',version='0.4',lifespan=lifespan)
 app.include_router(live_dashboard_router)
+app.include_router(inplay_router)
 
 
 # PARLAY_GUARD_COLLEGE_GUARD_V1
