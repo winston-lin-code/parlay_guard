@@ -4,7 +4,7 @@ import threading
 import pytest
 
 from src import inplay_scan as scan
-from src.inplay_api import ScanState
+from src.inplay_api import ScanState, rank_opportunities
 
 NOW = datetime(2026, 11, 25, 1, tzinfo=timezone.utc)
 PROJECTION = {"home_margin": 4, "projected_total": 224, "home_win_probability": 0.60}
@@ -56,6 +56,8 @@ def test_depth_fees_and_quote_expiry():
     result = scan.priced_side(book, 0.7, (0.05, 1), NOW)
     assert result["ask"] > result["best_ask"]
     assert 0 < result["screened_ev"] < result["ev"]
+    assert result["break_even_probability"] > result["ask"]
+    assert abs(result["screened_probability"] / result["break_even_probability"] - 1 - result["screened_ev"]) < 1e-10
     assert scan.priced_side({**book, "asks": book["asks"][:1]}, 0.7, (0, 1), NOW) is None
     assert scan.priced_side(book, 0.7, (0, 1), NOW + timedelta(seconds=36)) is None
     assert scan.fee_schedule({"feesEnabled": True}) is None
@@ -104,3 +106,22 @@ def test_expired_snapshot_never_returns_opportunities():
     state.snapshot = {"updated_utc": NOW.isoformat(), "opportunities": [{"quote_utc": NOW.isoformat()}]}
     assert state.read()["stale"]
     assert state.read()["opportunities"] == []
+
+
+def test_one_paper_pick_per_current_fixture():
+    game = {"event": "game-a", "phase": "live"}
+    pregame = {"event": "game-b", "phase": "pregame",
+               "start_utc": (NOW + timedelta(minutes=10)).isoformat()}
+    started = {**pregame, "event": "started", "start_utc": NOW.isoformat()}
+    row = {"event": game["event"], "phase": "live", "quote_utc": NOW.isoformat(),
+           "screened_ev": 0.15, "probability": 0.4, "token_id": "1"}
+    ranked, picks = rank_opportunities([
+        row,
+        {**row, "token_id": "2", "screened_ev": 0.12, "probability": 0.6},
+        {**row, "token_id": "3", "screened_ev": 0.25, "quote_utc": (NOW - timedelta(seconds=36)).isoformat()},
+        {**row, "event": pregame["event"], "phase": "pregame", "token_id": "4"},
+        {**row, "event": started["event"], "phase": "pregame", "token_id": "5"},
+        {**row, "token_id": "6", "screened_ev": 0},
+    ], [game, pregame, started], NOW)
+    assert [entry["token_id"] for entry in ranked] == ["1", "4", "2"]
+    assert picks == {"game-a": "1", "game-b": "4"}

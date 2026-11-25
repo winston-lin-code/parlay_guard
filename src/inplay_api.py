@@ -17,6 +17,30 @@ router = APIRouter()
 PAGE = Path(__file__).resolve().parents[1] / "static" / "inplay.html"
 
 
+def rank_opportunities(rows, games, now):
+    """Return fresh candidates and identify the top positive screened EV per fixture."""
+    fixtures = {game["event"]: game for game in games}
+    ranked = []
+    for row in rows:
+        game = fixtures.get(row["event"])
+        quote = utc(row.get("quote_utc"))
+        if (game is None or game.get("phase") != row.get("phase")
+                or quote is None or not -5 <= (now - quote).total_seconds() <= MAX_AGE
+                or row["screened_ev"] <= 0):
+            continue
+        if row["phase"] == "pregame":
+            tip = utc(game.get("start_utc"))
+            if tip is None or tip <= now:
+                continue
+        ranked.append(row)
+
+    ranked.sort(key=lambda row: (-row["screened_ev"], -row["probability"], row["token_id"]))
+    picks = {}
+    for row in ranked:
+        picks.setdefault(row["event"], row["token_id"])
+    return ranked, picks
+
+
 class ScanState:
     def __init__(self):
         self.lock = threading.Lock()
@@ -101,10 +125,8 @@ class ScanState:
                 continue
             observations.append(observed)
             games.extend(source.get("games", []))
-            for row in source["opportunities"]:
-                quote = utc(row.get("quote_utc"))
-                if quote is not None and -5 <= (now - quote).total_seconds() <= MAX_AGE:
-                    fresh.append(row)
+            fresh.extend(source["opportunities"])
+        ranked, picks = rank_opportunities(fresh, games, now)
         sports["games"] = [{k: v for k, v in game.items() if k != "college_markets"}
                            for game in sports.get("games", [])]
         coverage = dict(snapshot.get("coverage", {}))
@@ -112,7 +134,7 @@ class ScanState:
             coverage[key] = sum(game.get(key, 0) for game in games)
         return {**snapshot, "catalog": catalog, "sports": sports, "stale": not observations,
                 "updated_utc": max(observations).isoformat() if observations else snapshot.get("updated_utc"),
-                "coverage": coverage, "games": games, "opportunities": sorted(fresh, key=lambda row: -row["screened_ev"]),
+                "coverage": coverage, "games": games, "opportunities": ranked, "top_picks": picks,
                 "warnings": sorted(set(snapshot.get("warnings", []) + college.get("warnings", []))),
                 "venue": "Polymarket CLOB (international)", "supported_markets": sorted(SCORING_MARKETS)}
 

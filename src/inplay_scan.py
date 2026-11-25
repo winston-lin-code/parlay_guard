@@ -221,10 +221,13 @@ def priced_side(book, probability, fees, now):
     ask = REFERENCE_NOTIONAL / shares
     fee_per_share = fee / shares
     # Use the lower return under cash-fee and fee-in-shares accounting.
-    def net_ev(p):
-        return min(p / (ask + fee_per_share), p * (1 - fee_per_share / ask) / ask) - 1
+    payout_per_dollar = min(1 / (ask + fee_per_share), (1 - fee_per_share / ask) / ask)
+    screened_probability = max(0, probability - PROBABILITY_HAIRCUT)
+    break_even = 1 / payout_per_dollar
     return {"ask": ask, "best_ask": valid[0][0], "shares": shares, "fee_per_share": fee_per_share,
-            "ev": net_ev(probability), "screened_ev": net_ev(max(0, probability - PROBABILITY_HAIRCUT)),
+            "ev": probability * payout_per_dollar - 1,
+            "screened_ev": screened_probability * payout_per_dollar - 1,
+            "break_even_probability": break_even, "screened_probability": screened_probability,
             "quote_utc": datetime.fromtimestamp(timestamp / 1000, timezone.utc).isoformat()}
 
 

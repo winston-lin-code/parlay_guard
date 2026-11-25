@@ -163,7 +163,7 @@ summary { cursor: pointer; font-weight: 650; font-size: .875rem; }
   <section aria-labelledby="results-title">
     <div class="section-heading">
       <div><h2 id="results-title">Games &amp; opportunities</h2><p class="section-meta" id="result-count" aria-live="polite">Waiting for games</p></div>
-      <div class="controls"><label class="sr-only" for="sport-filter">Filter by sport or league</label><select class="sport-picker" id="sport-filter"><option value="">All sports</option></select>
+      <div class="controls"><label><input type="checkbox" id="show-all"> Show all positive EV</label><label class="sr-only" for="sport-filter">Filter by sport or league</label><select class="sport-picker" id="sport-filter"><option value="">All sports</option></select>
       <fieldset class="filters" id="filters">
         <legend class="sr-only">Filter by game state</legend>
         <label><input class="sr-only" type="radio" name="phase" value="all" checked>All</label>
@@ -179,7 +179,7 @@ summary { cursor: pointer; font-weight: 650; font-size: .875rem; }
   <details class="methodology" id="methodology">
     <summary>How to read the estimates</summary>
     <p><strong>Avg. ask</strong> is the estimated average entry price for $10 of orders before fees. Open a row to see the best ask, fee estimate, net EV, and quote age.</p>
-    <p><strong>Screened EV</strong> applies fees and subtracts five percentage points from the model probability. Only positive screened estimates appear.</p>
+    <p><strong>Screened EV</strong> applies fees and subtracts five percentage points from the model probability. The default view shows the highest positive screened EV per game as a paper pick. The five-point adjustment is a fixed stress test. Break-even probability uses the estimated fee and fill price.</p>
     <p id="calibration">Waiting for calibration details.</p>
     <p>The sports catalog lists recent and upcoming fixtures through the next 36 hours. In-play estimates cover NBA regular-season games before the final regulation minute. College estimates cover pregame markets that passed held-out probability checks. Simulated spreads and totals were used to test college probability estimates. Research only.</p>
   </details>
@@ -209,7 +209,7 @@ summary { cursor: pointer; font-weight: 650; font-size: .875rem; }
 <template id="opportunity-template">
   <li class="opportunity">
     <div class="result-grid">
-      <div class="selection"><span data-field="selection"></span><span class="secondary" data-field="market"></span></div>
+      <div class="selection"><span data-field="selection"></span><span class="secondary" data-field="pick"></span><span class="secondary" data-field="market"></span></div>
       <div class="number-col"><span class="metric-label">Model probability</span><span class="metric-value" data-field="probability"></span></div>
       <div class="number-col"><span class="metric-label">Avg. ask</span><span class="metric-value" data-field="ask"></span></div>
       <div class="number-col"><span class="metric-label">Screened EV</span><span class="edge" data-field="edge"></span></div>
@@ -219,6 +219,8 @@ summary { cursor: pointer; font-weight: 650; font-size: .875rem; }
       <div><dt>Best ask</dt><dd data-field="best-ask"></dd></div>
       <div><dt>Fee per share</dt><dd data-field="fee"></dd></div>
       <div><dt>Net EV</dt><dd data-field="net-ev"></dd></div>
+      <div><dt>Screened probability</dt><dd data-field="screened-probability"></dd></div>
+      <div><dt>Break-even probability</dt><dd data-field="break-even"></dd></div>
       <div><dt>Quote age</dt><dd data-field="quote-age"></dd></div>
     </dl>
   </li>
@@ -283,6 +285,7 @@ function updateRow(row, opportunity, now) {
   const label = opportunity.side + ' · ' + opportunity.matchup;
   const fields = {
     selection: opportunity.side,
+    pick: opportunity.topPick ? "Top paper pick" : "",
     market: opportunity.market,
     probability: percent(opportunity.probability),
     ask: price(opportunity.ask),
@@ -290,6 +293,8 @@ function updateRow(row, opportunity, now) {
     'best-ask': price(opportunity.best_ask),
     fee: price(opportunity.fee_per_share),
     'net-ev': percent(opportunity.ev, true),
+    'screened-probability': percent(opportunity.screened_probability),
+    'break-even': percent(opportunity.break_even_probability),
     'quote-age': age + 's',
   };
   for (const [key, value] of Object.entries(fields)) setText(row.fields[key], value);
@@ -364,7 +369,8 @@ function mergeGames(state, fresh, now) {
       }
       const game = games.get(opportunity.event);
       if (opportunity.phase === 'pregame' && Date.parse(game.start_utc) <= now) continue;
-      game.entries.push(opportunity);
+      const topPick = state.top_picks?.[opportunity.event] === opportunity.token_id;
+      if (topPick || byId('show-all').checked) game.entries.push({...opportunity, topPick});
     }
   }
   return games;
@@ -411,7 +417,7 @@ function renderFixture(game, now) {
   link.hidden = !/^[a-z0-9][a-z0-9-]*$/.test(game.slug || '');
   if (!link.hidden) link.href = 'https://polymarket.com/event/' + game.slug;
   const displayed = renderRows(view, game.entries, now);
-  setText(fields.status, displayed ? count(displayed) + ' positive EV'
+  setText(fields.status, displayed ? (byId('show-all').checked ? count(displayed) + ' positive EV' : 'Top paper pick')
     : game.priced_sides ? 'No positive EV' : game.modeled_markets ? 'Waiting for usable quotes'
     : game.college && game.phase === 'live' ? 'College EV available before tipoff only'
     : leagueKey(game) !== NBA_LEAGUE && !game.college ? 'EV model unavailable'
@@ -447,7 +453,7 @@ function renderBoard(games, now) {
     }
     if (selected && selected !== lastSelectedLeague) view.node.open = true;
     setText(view.fields.league, group.label);
-    setText(view.fields.count, count(group.games.length) + ' games' + (group.positive ? ' · ' + count(group.positive) + ' positive EV' : ''));
+    setText(view.fields.count, count(group.games.length) + ' games' + (group.positive ? ' · ' + count(group.positive) + (byId('show-all').checked ? ' positive EV' : ' paper picks') : ''));
     group.games.sort((a,b) => Number(b.phase === 'live') - Number(a.phase === 'live')
       || Number(Boolean(b.entries.length)) - Number(Boolean(a.entries.length))
       || String(a.start_utc || '').localeCompare(String(b.start_utc || '')));
@@ -504,7 +510,7 @@ function render() {
   const {totalGames, positive} = renderBoard(games, now);
   byId('empty').hidden = totalGames > 0;
   setText(byId('result-count'), totalGames
-    ? count(totalGames) + ' games shown · ' + count(positive) + ' positive EV estimates'
+    ? count(totalGames) + ' games shown · ' + count(positive) + (byId('show-all').checked ? ' positive EV estimates' : ' paper picks')
     : 'No games shown');
   const title = games.size ? 'No games match these filters'
     : unavailable ? 'Scanner temporarily unavailable' : 'Waiting for games';
@@ -532,6 +538,7 @@ async function refresh() {
 
 byId('filters').addEventListener('change', render);
 byId('sport-filter').addEventListener('change', render);
+byId('show-all').addEventListener('change', render);
 refresh();
 setInterval(refresh, 5000);
 setInterval(render, 1000);
