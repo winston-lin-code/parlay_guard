@@ -41,7 +41,7 @@ def _features(home, away, day, history):
     return record
 
 
-def feature_training(completed: pd.DataFrame, *, include_elo=False):
+def feature_training(completed: pd.DataFrame, *, include_elo=False, include_game_id=False):
     needed = {'GAME_DATE','HOME_TEAM','AWAY_TEAM','HOME_PTS','AWAY_PTS'}
     missing = needed - set(completed.columns)
     if missing: raise ValueError(f'Missing completed-game columns: {sorted(missing)}')
@@ -60,6 +60,8 @@ def feature_training(completed: pd.DataFrame, *, include_elo=False):
             if feat is not None:
                 if include_elo:
                     feat[ELO_FEATURE] = getattr(g, ELO_FEATURE)
+                if include_game_id:
+                    feat['game_id'] = str(g.GAME_ID)
                 feat.update(date=day, home_margin=float(g.HOME_PTS)-float(g.AWAY_PTS),
                             total=float(g.HOME_PTS)+float(g.AWAY_PTS))
                 records.append(feat)

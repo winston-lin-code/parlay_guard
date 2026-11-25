@@ -14,6 +14,7 @@ from .auto_live import CLOB, ET, GAMMA, NICKNAMES, array, as_num, match_team, ut
 from .common import DATA
 from .elo import INITIAL_ELO
 from .game_lines_live import fit_line_models, predict_line
+from .inplay_calibration import apply_calibration, load_calibration
 from .predict_today import (clean_team_history, compute_elo, fetch_current_season,
                             load_history, make_completed_games, normalize_schedule_team)
 
@@ -47,7 +48,8 @@ def parse_games(events, now):
     for event in events:
         tip = utc(event.get("date"))
         competitions = event.get("competitions") or []
-        if tip is None or len(competitions) != 1 or (event.get("season") or {}).get("type") not in (2, 3, "2", "3"):
+        season_type = (event.get("season") or {}).get("type")
+        if tip is None or len(competitions) != 1 or season_type not in (2, 3, "2", "3"):
             continue
         competition = competitions[0]
         status = competition.get("status") or event.get("status") or {}
@@ -79,6 +81,8 @@ def parse_games(events, now):
                 continue
             remaining = 2880
         else:
+            if int(season_type) != 2:
+                continue
             if period not in (1, 2, 3, 4) or clock is None or not 0 <= clock <= 720:
                 continue
             if hp is None or ap is None or min(hp, ap) < 0 or not hp.is_integer() or not ap.is_integer():
@@ -284,6 +288,9 @@ def scan_opportunities():
     started = datetime.now(timezone.utc)
     day = started.astimezone(ET).date()
     warnings = []
+    calibration = load_calibration()
+    if calibration is None:
+        warnings.append("In-play calibration is unavailable")
     coverage = {"games": 0, "live_games": 0, "open_markets": 0, "modeled_markets": 0, "priced_sides": 0}
 
     def fetch(label, function, arg, default):
@@ -308,7 +315,14 @@ def scan_opportunities():
             prior = fetch("NBA pregame inputs", game_prior, game, None)
             if prior is None:
                 continue
-            frame = probability_frame(game, *prior)
+            if game["phase"] == "in" and calibration is None:
+                continue
+            projection, metrics = prior
+            if game["phase"] == "in":
+                frame = probability_frame(game, projection, calibration["reference_errors"])
+                frame = apply_calibration(frame, game["remaining"], calibration)
+            else:
+                frame = probability_frame(game, projection, metrics)
             for market in markets:
                 sides = market_probabilities(market, game, frame)
                 fees = fee_schedule(market)
@@ -354,6 +368,9 @@ def scan_opportunities():
                 "market": market["question"], "side": label, "token_id": token,
                 "probability": probability, **priced,
             })
-    return {"updated_utc": now.isoformat(), "coverage": coverage,
+    calibration_summary = {key: calibration[key] for key in (
+        "version", "calibration_season", "holdout_season", "holdout_games", "market_lines", "holdout",
+    )} if calibration else None
+    return {"updated_utc": now.isoformat(), "coverage": coverage, "calibration": calibration_summary,
             "opportunities": sorted(opportunities, key=lambda row: -row["screened_ev"]),
             "warnings": sorted(set(warnings))}
