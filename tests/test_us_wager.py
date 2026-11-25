@@ -146,3 +146,38 @@ def test_preview_uses_cached_listing_with_separate_fresh_book(monkeypatch):
     monkeypatch.setattr(requests, "get", lambda *_, **kwargs: Response(23, {}))
     with pytest.raises(WagerError, match="stale order book"):
         us_wager.public("/v1/markets/" + MARKET + "/book", fresh_book=True)
+
+
+def test_deep_link_uses_verified_us_market_and_outcome_without_a_quote(monkeypatch):
+    app = FastAPI()
+    app.include_router(api.router)
+    browser = TestClient(app)
+    contract = {**CONTRACT, "marketSides": [
+        {**CONTRACT["marketSides"][0], "id": "5795154"},
+        {**CONTRACT["marketSides"][1], "id": "5795155"},
+    ]}
+    event = {**US_EVENT, "seriesSlug": "nba-2025", "markets": [contract]}
+    row = {**PICK, "phase": "pregame", "token_id": "123", "screened_ev": .2}
+    game = {"event": EVENT, "phase": "pregame", "start_utc": START.isoformat()}
+    monkeypatch.setattr(api.scanner, "read", lambda: {"games": [game], "opportunities": [row]})
+    calls = []
+
+    def public(path, **kwargs):
+        calls.append(path)
+        if path == "/v1/events/slug/" + EVENT:
+            return {"event": event}
+        raise WagerError("Polymarket US has no fresh price for this contract.")
+
+    monkeypatch.setattr(api, "public", public)
+    monkeypatch.delenv("PARLAY_GUARD_US_ORDERS", raising=False)
+    route = "/api/inplay/us-wager/"
+    pick = {"event": EVENT, "token_id": "123"}
+    assert browser.post(route + "preview", json={**pick, "quantity": 3}).status_code == 409
+    response = browser.get(route + "link", params=pick)
+    assert response.status_code == 200
+    assert response.json()["url"] == f"https://polymarket.us/sports/nba/{EVENT}?marketSlug={MARKET}&outcomeId=5795155"
+    assert calls[-1] == "/v1/events/slug/" + EVENT
+    row["side"] = "Over"
+    assert browser.get(route + "link", params=pick).json()["url"].endswith("outcomeId=5795154")
+    contract["marketSides"][0]["id"] = ""
+    assert browser.get(route + "link", params=pick).status_code == 409

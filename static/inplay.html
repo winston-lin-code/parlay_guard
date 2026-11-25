@@ -90,6 +90,7 @@ details > summary { color: var(--muted); font-size: .84rem; }
 #order-dialog .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 #order-dialog p, #order-dialog details { margin-top: 8px; }
 .order-actions { justify-content: end; flex-wrap: wrap; margin-top: 13px; }
+#order-external { display: inline-block; text-decoration: none; }
 #order-confirm { background: var(--mint); color: #102219; font-weight: 720; }
 .placeholder { padding: 25px 19px; color: var(--muted); font-size: .87rem; }
 .footer-detail { margin-top: 14px; padding: 11px 14px; background: var(--inset); border: 1px solid var(--line); border-radius: 8px; }
@@ -186,6 +187,8 @@ details > summary { color: var(--muted); font-size: .84rem; }
     <form id="order-form">
       <header><h2 id="order-title">Polymarket US wager</h2><button type="button" class="control" id="order-close">Close</button></header>
       <p id="order-selection" class="selection"></p>
+      <p><a id="order-external" class="control" target="_blank" rel="noopener noreferrer" hidden>Open on Polymarket US</a></p>
+      <p id="order-link-status" class="muted" role="status"></p>
       <label>Contracts<input type="number" min="1" max="10000" step="1" required class="control" id="order-quantity"></label>
       <label id="order-access" hidden>Trading access token<input type="password" autocomplete="off" class="control" id="order-token"></label>
       <div id="order-preview" hidden>
@@ -511,6 +514,32 @@ async function orderRequest(path, payload) {
   return data;
 }
 
+async function resolveOrderLink(selection) {
+  const link = $('order-external');
+  link.hidden = true;
+  link.removeAttribute('href');
+  text('order-link-status', 'Finding this selection on Polymarket US…');
+  try {
+    const query = new URLSearchParams(selection);
+    const response = await fetch(ORDER_API + 'link?' + query, {cache:'no-store', signal:AbortSignal.timeout(8000)});
+    const data = await response.json();
+    if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Exact US link unavailable.');
+    const url = new URL(data.url);
+    if (url.origin !== 'https://polymarket.us' || !url.pathname.startsWith('/sports/')
+        || !url.searchParams.has('marketSlug') || !url.searchParams.has('outcomeId')) {
+      throw new Error('Exact US link unavailable.');
+    }
+    if (!$('order-dialog').open || selection !== orderSelection) return;
+    link.href = url.href;
+    link.hidden = false;
+    text('order-link-status', '');
+  } catch (error) {
+    if ($('order-dialog').open && selection === orderSelection) {
+      text('order-link-status', error instanceof TypeError ? 'US market lookup unavailable.' : error.message);
+    }
+  }
+}
+
 $('detail').addEventListener('click', async event => {
   const button = event.target.closest('[data-wager]');
   if (!button) return;
@@ -528,6 +557,7 @@ $('detail').addEventListener('click', async event => {
   orderActions();
   $('order-dialog').showModal();
   const opened = orderSelection;
+  void resolveOrderLink(opened);
   try {
     const response = await fetch(ORDER_API + 'status', {cache:'no-store', signal:AbortSignal.timeout(8000)});
     if (!response.ok) throw new Error();

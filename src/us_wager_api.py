@@ -9,19 +9,22 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from .inplay_api import scanner
 from .inplay_scan import utc
-from .us_wager import BOOK_MAX_AGE, WagerError, decimal, match_contract, public, quote_order
+from .us_wager import BOOK_MAX_AGE, WagerError, contract_url, decimal, match_contract, public, quote_order
 
 router = APIRouter(prefix="/api/inplay/us-wager")
 
 
-class Selection(BaseModel):
+class PickReference(BaseModel):
     event: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,159}$")
     token_id: str = Field(pattern=r"^\d{1,90}$")
+
+
+class Selection(PickReference):
     quantity: int = Field(strict=True, ge=1, le=10000)
 
 
@@ -69,10 +72,15 @@ def active_pick(selection):
     return pick, starts.pop()
 
 
-def current_order(selection):
+def us_contract(selection):
     pick, start = active_pick(selection)
     event = public("/v1/events/slug/" + selection.event)["event"]
     contract, long = match_contract(pick, event, start)
+    return pick, start, event, contract, long
+
+
+def current_order(selection):
+    pick, start, _, contract, long = us_contract(selection)
     book = public("/v1/markets/" + contract["slug"] + "/book", fresh_book=True)["marketData"]
     current, current_start = active_pick(selection)
     keys = ("phase", "score", "market", "market_type", "line", "side", "half_payout_tie")
@@ -102,6 +110,17 @@ def checked_quote(selection):
 @router.get("/status")
 def status():
     return {"direct_orders": bool(enabled(configuration()))}
+
+
+@router.get("/link")
+def wager_link(selection: PickReference = Query()):
+    try:
+        _, _, event, contract, long = us_contract(selection)
+        return {"url": contract_url(event, contract, long)}
+    except WagerError as exc:
+        raise HTTPException(409, str(exc)) from None
+    except Exception:
+        raise HTTPException(502, "Polymarket US market lookup is temporarily unavailable.") from None
 
 
 @router.post("/preview")
