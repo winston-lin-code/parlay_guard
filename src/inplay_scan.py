@@ -25,11 +25,13 @@ PROBABILITY_HAIRCUT = 0.05
 SCORING_MARKETS = {"moneyline", "spreads", "totals"}
 
 
-def read_json(method, url, **kwargs):
+def read_json(method, url, *, max_age=None, **kwargs):
     response = requests.request(method, url, timeout=(4, 8), **kwargs)
     response.raise_for_status()
     age = as_num(response.headers.get("Age"))
-    if age is not None and age > MAX_AGE and (url == ESPN_SCOREBOARD or url.endswith("/books")):
+    if max_age is None and (url == ESPN_SCOREBOARD or url.endswith("/books")):
+        max_age = MAX_AGE
+    if age is not None and max_age is not None and age > max_age:
         raise ValueError("Upstream returned a cached live feed")
     return response.json()
 

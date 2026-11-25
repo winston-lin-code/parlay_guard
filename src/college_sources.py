@@ -71,7 +71,7 @@ def outcome_team(label, home, away):
     return matched[0] if len(matched)==1 else None
 
 
-def parse_espn(payload, sport, day, now=None):
+def parse_espn(payload, sport, day, now=None, *, phase="pre"):
     now=now or datetime.now(timezone.utc)
     games=[]
     for ev in payload.get('events') or []:
@@ -89,12 +89,19 @@ def parse_espn(payload, sport, day, now=None):
                           'location':str(t.get('location') or ''),'name':str(t.get('name') or ''),
                           'abbr':str(t.get('abbreviation') or ''),'logo':logo}
         if set(teams)!={'home','away'}:continue
-        state=str(((ev.get('status') or {}).get('type') or {}).get('state') or '')
-        if state != 'pre':continue
+        event_status=ev.get('status') or comp.get('status') or {}
+        state=str((event_status.get('type') or {}).get('state') or '')
+        if state != phase:continue
         when=utc(ev.get('date') or comp.get('date'))
-        if when is None or when <= now+timedelta(minutes=5):continue
+        if when is None or (phase == "pre" and when <= now+timedelta(minutes=5)):continue
         if when.astimezone(ET).date().isoformat() != day:continue
-        games.append({'sport':sport,'espn_id':str(ev.get('id') or ''),'home':teams['home'],
+        current = {}
+        if phase == "in":
+            scores = {item.get("homeAway"): item.get("score") for item in comp.get("competitors") or []}
+            current = {"score_text": f"{scores.get('home')}-{scores.get('away')}",
+                       "period_text": f"Q{event_status.get('period')}",
+                       "clock_text": event_status.get("displayClock") or ""}
+        games.append({**current,'sport':sport,'espn_id':str(ev.get('id') or ''),'home':teams['home'],
                       'away':teams['away'],'start_utc':when.isoformat(),
                       'neutral':bool(comp.get('neutralSite')),
                       'season':int((ev.get('season') or {}).get('year') or (when.year + (when.month>=10 and sport=='mbb'))),

@@ -13,6 +13,7 @@ from .inplay_scan import MAX_AGE, SCORING_MARKETS, scan_catalog, scan_opportunit
 
 from .sports_inventory import scan_sports_events
 from .college_ev_scan import scan_college
+from .nfl_inplay_scan import scan_nfl
 from .game_board_feed import FINAL_SCORE_AGE, MAX_SCORE_AGE, follow_scores, scan_moneylines
 
 router = APIRouter()
@@ -68,11 +69,12 @@ class ScanState:
         self.has_complete_sports_slate = False
         self.moneyline_quotes = {}
         self.scores = {}
+        self.nfl = {"updated_utc": None, "games": [], "opportunities": [], "warnings": []}
         self.college = {"updated_utc": None, "games": [], "opportunities": [], "warnings": []}
 
     def start(self):
         self.stop.clear()
-        for target in (self.live_loop, self.catalog_loop, self.sports_loop, self.college_loop, self.board_loop, self.score_loop):
+        for target in (self.live_loop, self.catalog_loop, self.sports_loop, self.college_loop, self.board_loop, self.score_loop, self.nfl_loop):
             worker = threading.Thread(target=target, daemon=True)
             worker.start()
             self.workers.append(worker)
@@ -155,10 +157,11 @@ class ScanState:
     def read(self):
         with self.lock:
             snapshot, catalog, sports = dict(self.snapshot), dict(self.catalog), dict(self.sports)
-            college, quotes, scores = dict(self.college), dict(self.moneyline_quotes), dict(self.scores)
+            college, nfl = dict(self.college), dict(self.nfl)
+            quotes, scores = dict(self.moneyline_quotes), dict(self.scores)
         now = datetime.now(timezone.utc)
         fresh, games, observations = [], [], []
-        for source in (snapshot, college):
+        for source in (snapshot, college, nfl):
             observed = utc(source.get("updated_utc"))
             if observed is None or not -5 <= (now - observed).total_seconds() <= MAX_AGE:
                 continue
@@ -182,8 +185,9 @@ class ScanState:
             if state or prices:
                 board.append({"event": event, "moneyline_quotes": prices, **state})
         # A confirmed live/final transition invalidates stale pregame EV immediately.
-        model_at = utc(snapshot.get("updated_utc"))
-        fresh = [row for row in fresh if agrees_with_board(row, score_states.get(row["event"], {}), model_at)]
+        times = {game["event"]: utc(game["state_observed_utc"]) for game in games}
+        fresh = [row for row in fresh if agrees_with_board(
+            row, score_states.get(row["event"], {}), times.get(row["event"]))]
         ranked, picks = rank_opportunities(fresh, games, now)
         sports["games"] = [{k: v for k, v in game.items() if k not in ("college_markets", "moneyline", "sports_game_id")}
                            for game in sports.get("games", [])]
@@ -194,8 +198,22 @@ class ScanState:
                 "updated_utc": max(observations).isoformat() if observations else snapshot.get("updated_utc"),
                 "coverage": coverage, "games": games, "opportunities": ranked, "top_picks": picks,
                 "board": board,
-                "warnings": sorted(set(snapshot.get("warnings", []) + college.get("warnings", []))),
+                "warnings": sorted(set(snapshot.get("warnings", []) + college.get("warnings", []) + nfl.get("warnings", []))),
                 "venue": "Polymarket CLOB (international)", "supported_markets": sorted(SCORING_MARKETS)}
+
+    def nfl_loop(self):
+        while not self.stop.is_set():
+            started = time.monotonic()
+            with self.lock:
+                fixtures = self.sports
+            try:
+                snapshot = scan_nfl(fixtures)
+            except Exception as exc:
+                snapshot = {"updated_utc": None, "games": [], "opportunities": [],
+                            "warnings": [f"NFL live scan unavailable: {type(exc).__name__}"]}
+            with self.lock:
+                self.nfl = snapshot
+            self.stop.wait(max(4, 15 - (time.monotonic() - started)))
 
     def college_loop(self):
         while not self.stop.is_set():
