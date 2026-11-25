@@ -3,542 +3,459 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#101714">
+<meta name="theme-color" content="#10171b">
 <title>Live EV Scanner | Parlay Guard</title>
 <style>
 :root {
-  color-scheme: dark;
-  --bg: #101714;
-  --surface: #17211c;
-  --raised: #1d2b23;
-  --line: #34463a;
-  --text: #f1f5f0;
-  --muted: #a9b9ae;
-  --green: #c0ed9b;
-  --amber: #f0c981;
-  --danger: #ffb5a4;
-  font: 16px/1.45 system-ui, sans-serif;
+  color-scheme: dark; font: 16px/1.5 system-ui, sans-serif;
+  --canvas: #10171b; --panel: #172126; --inset: #131d22; --line: #2c3d46;
+  --text: #eef5f5; --muted: #a2b4bd; --mint: #91f0c4; --amber: #f1ce8f; --up: #9af0c8; --down: #ffc0b7;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-body { margin: 0; background: var(--bg); color: var(--text); }
-a { color: inherit; text-underline-offset: 4px; }
-a:hover { color: var(--green); }
-a:focus-visible, label:has(input:focus-visible), summary:focus-visible, button:focus-visible {
-  outline: 2px solid var(--green); outline-offset: 4px;
-}
-.shell { width: min(100% - 64px, 1140px); margin-inline: auto; }
-.topbar { border-bottom: 1px solid var(--line); }
-.nav { display: flex; justify-content: space-between; gap: 18px; align-items: center; min-height: 69px; }
-.brand { font-weight: 760; letter-spacing: -.025em; text-decoration: none; }
-.nav-links { display: flex; flex-wrap: wrap; gap: 22px; color: var(--muted); font-size: .875rem; }
+body { margin: 0; background: var(--canvas); color: var(--text); }
+button, input, select { font: inherit; }
+button, select, summary { cursor: pointer; }
+a { color: inherit; text-underline-offset: .25em; }
+a:hover { color: var(--mint); }
+:focus-visible { outline: 2px solid var(--mint); outline-offset: 3px; }
+h1,h2,h3,p,dl { margin: 0; }
+.shell { width: min(1200px, 100% - 56px); margin-inline: auto; }
+.top { border-bottom: 1px solid var(--line); }
+.nav { min-height: 64px; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.brand { font-weight: 750; text-decoration: none; }
+.nav-links { display: flex; gap: 20px; color: var(--muted); font-size: .86rem; }
 .nav-links a { text-decoration: none; }
-main { padding-block: 46px 64px; }
-.intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 27px; }
-h1, h2, h3, p { margin: 0; }
-h1 { font-size: clamp(2.25rem, 5vw, 3.65rem); line-height: 1.04; letter-spacing: -.061em; }
-h2 { font-size: 1.3rem; letter-spacing: -.028em; }
-.subtitle { color: var(--muted); margin-top: 10px; }
-.status {
-  display: flex; align-items: center; gap: 9px; width: fit-content; flex-shrink: 0; padding: 9px 12px;
-  color: var(--muted); font-size: .835rem; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+main { padding-block: 38px 60px; }
+.hero { display: flex; justify-content: space-between; align-items: end; gap: 16px; margin-bottom: 24px; }
+h1 { font-size: clamp(2.25rem, 5vw, 3.6rem); letter-spacing: -.065em; line-height: 1.05; }
+.hero p { color: var(--muted); margin-top: 8px; }
+.feed { display: flex; align-items: center; gap: 8px; white-space: nowrap; font-size: .8rem; }
+.feed::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.feed[data-live="true"] { color: var(--mint); }
+.toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.tabs { display: flex; padding: 3px; gap: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--inset); }
+.tabs button { border: 0; padding: 7px 12px; border-radius: 6px; background: transparent; color: var(--muted); font-size: .86rem; }
+.tabs button[aria-pressed="true"] { background: var(--mint); color: #102219; font-weight: 700; }
+.control { min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--inset); color: var(--text); font-size: .86rem; }
+#search { margin-left: auto; width: min(220px, 100%); }
+.workspace { display: grid; grid-template-columns: minmax(255px, .72fr) minmax(0, 1.55fr); align-items: start; gap: 18px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 13px; min-width: 0; }
+.list-header { padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.list-header h2 { font-size: .98rem; }
+.muted, .list-header p { color: var(--muted); font-size: .84rem; }
+#games { max-height: 72vh; overflow: auto; padding: 6px; }
+.game { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; text-align: left; gap: 4px 10px; width: 100%;
+  padding: 10px 11px; color: var(--text); background: transparent; border: 1px solid transparent; border-radius: 8px; }
+.game:hover { background: #213039; }
+.game[aria-current="true"] { background: #243931; border-color: #406758; }
+.game strong { font-size: .91rem; overflow-wrap: anywhere; }
+.game .score { font-weight: 700; font-size: .86rem; }
+.game .meta { font-size: .73rem; color: var(--muted); }
+.game .edge { font-size: .78rem; justify-self: end; }
+.is-live { color: var(--mint); }
+.detail { min-height: 320px; overflow: hidden; }
+.detail-header { padding: 20px; background: linear-gradient(125deg, #20342e, #172126 65%); }
+.detail-meta { display: flex; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.market-link { font-size: .83rem; color: var(--muted); }
+.match h2 { font-size: clamp(1.45rem, 3.7vw, 2.6rem); letter-spacing: -.048em; line-height: 1.18; overflow-wrap: anywhere; }
+.game-clock { display: flex; gap: 9px 13px; flex-wrap: wrap; align-items: baseline; margin-top: 9px; }
+.game-clock strong { font-size: clamp(1.4rem, 4vw, 2.2rem); line-height: 1.1; font-variant-numeric: tabular-nums; }
+.section { padding: 16px 20px; border-top: 1px solid var(--line); }
+.section h3 { font-size: .97rem; }
+.section-title { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 5px 10px; margin-bottom: 9px; }
+.quotes, .metrics { display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.quote, .metric { padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--inset); min-width: 0; }
+.quote dt, .metric dt { color: var(--muted); font-size: .76rem; overflow-wrap: anywhere; }
+.quote dd, .metric dd { margin: 3px 0 0; font-size: 1.09rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.quote small { padding-left: .45rem; font-size: .7rem; white-space: nowrap; }
+.quote small[data-move="up"] { color: var(--up); }
+.quote small[data-move="down"] { color: var(--down); }
+.metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 10px; }
+.edge { color: var(--mint); font-variant-numeric: tabular-nums; }
+.selection { font-size: 1.03rem; line-height: 1.35; font-weight: 700; overflow-wrap: anywhere; }
+.selection-market { font-size: .83rem; color: var(--muted); overflow-wrap: anywhere; }
+details > summary { color: var(--muted); font-size: .84rem; }
+.alternatives { margin-top: 12px; }
+.alt-list { padding: 0; margin: 10px 0 0; list-style: none; }
+.alt-list li { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding: 8px 0; font-size: .84rem; }
+.alt-list .numbers { flex-shrink: 0; text-align: right; }
+.alt-list .numbers small { display: block; color: var(--muted); }
+.placeholder { padding: 25px 19px; color: var(--muted); font-size: .87rem; }
+.footer-detail { margin-top: 14px; padding: 11px 14px; background: var(--inset); border: 1px solid var(--line); border-radius: 8px; }
+.footer-detail p, .footer-detail ul { color: var(--muted); font-size: .85rem; margin-block: 8px 0; }
+#feed-notices > summary { color: var(--amber); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media (max-width: 700px) {
+  .shell { width: min(100% - 28px, 560px); }
+  main { padding-top: 24px; }
+  .hero { align-items: start; flex-direction: column; gap: 7px; margin-bottom: 16px; }
+  .workspace { grid-template-columns: 1fr; gap: 12px; }
+  #games { max-height: 240px; }
+  .toolbar { gap: 7px; }
+  #search { margin-left: 0; flex: 1 1 130px; }
+  .nav-links { gap: 9px; font-size: .76rem; }
+  .section, .detail-header { padding-inline: 14px; }
 }
-.status::before { content: ""; width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: currentColor; }
-.status[data-state="fresh"] { color: var(--green); }
-.status[data-state="stale"] { color: var(--amber); }
-.status[data-state="error"] { color: var(--danger); }
-.coverage {
-  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 0 36px; padding: 0;
-  border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
-}
-.stat { min-width: 0; padding: 15px 18px; }
-.stat + .stat { border-left: 1px solid var(--line); }
-.stat dt { color: var(--muted); font-size: .8125rem; }
-.stat dd { margin: 4px 0 0; font-size: 1.6rem; line-height: 1.2; font-weight: 720; letter-spacing: -.035em; }
-.stat small { display: block; min-height: 1.3em; margin-top: 4px; color: var(--muted); font-size: .75rem; font-weight: 450; letter-spacing: normal; }
-.section-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: 14px; margin-bottom: 13px; }
-.section-meta { color: var(--muted); font-size: .84rem; margin-top: 4px; }
-.filters { display: flex; flex-wrap: wrap; gap: 3px; margin: 0; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
-.filters label { position: relative; padding: 7px 12px; border-radius: 5px; cursor: pointer; color: var(--muted); font-size: .8125rem; font-weight: 650; }
-.filters label:has(input:checked) { background: var(--green); color: #162015; }
-.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
-.controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.sport-picker { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); padding: 8px 10px; font: inherit; font-size: .84rem; max-width: 245px; }
-.board { display: grid; gap: 13px; }
-.league { border: 1px solid var(--line); background: var(--surface); border-radius: 11px; }
-.league > summary { padding: 13px 16px; line-height: 1.35; }
-.league-count, .game-status { color: var(--muted); font-size: .8rem; font-weight: 450; }
-.league-count { margin-left: 10px; }
-.fixture { border-top: 1px solid var(--line); }
-.fixture-header { display: flex; justify-content: space-between; align-items: start; flex-wrap: wrap; gap: 7px 15px; padding: 13px 16px; }
-.fixture-title { font-size: 1rem; letter-spacing: -.015em; }
-.fixture-meta { display: flex; gap: 6px 12px; flex-wrap: wrap; margin-top: 4px; color: var(--muted); font-size: .8rem; }
-.fixture-meta a { text-decoration: underline; }
-.fixture-meta [data-live="true"] { color: var(--green); font-weight: 650; }
-.fixture .result-head { border-top: 1px solid var(--line); }
-.fixture .result-grid { grid-template-columns: minmax(200px, 2fr) minmax(86px, .8fr) minmax(95px, .85fr) minmax(106px, .9fr) 32px; }
-.fixture .opportunity:first-child { border-top: 1px solid var(--line); }
-@media (max-width: 860px) {
-  .fixture .result-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) 32px; }
-  .fixture .opportunity:first-child { border-top: 1px solid var(--line); }
-  .sport-picker { max-width: min(100%, 245px); }
-}
-.results { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--surface); }
-.result-grid {
-  display: grid; grid-template-columns: minmax(210px, 2.2fr) minmax(130px, 1.25fr) minmax(86px, .8fr) minmax(95px, .85fr) minmax(106px, .9fr) 32px;
-  gap: 13px; align-items: center; padding: 14px 17px;
-}
-.result-head { color: var(--muted); font-size: .75rem; background: var(--raised); }
-.number-col { text-align: right; font-variant-numeric: tabular-nums; }
-.opportunities { list-style: none; padding: 0; margin: 0; }
-.opportunity { border-top: 1px solid var(--line); }
-.opportunity:hover { background: #1b271f; }
-.selection, .matchup { font-weight: 690; overflow-wrap: anywhere; }
-.secondary { display: block; font-size: .81rem; color: var(--muted); font-weight: 450; margin-top: 3px; overflow-wrap: anywhere; }
-.metric-value { font-weight: 620; }
-.edge { color: var(--green); font-size: 1.16rem; letter-spacing: -.035em; font-weight: 760; }
-.metric-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.details-toggle {
-  width: 32px; height: 32px; display: grid; place-items: center; justify-self: end;
-  border: 1px solid var(--line); border-radius: 6px; background: var(--raised); color: var(--text); font: inherit; cursor: pointer;
-}
-.details-toggle::before { content: "+"; }
-.details-toggle[aria-expanded="true"]::before { content: "−"; }
-.details-toggle:hover { border-color: var(--green); }
-.quote-details { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0 17px 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
-.quote-details dt { color: var(--muted); font-size: .77rem; }
-.quote-details dd { margin: 3px 0 0; font-size: .9rem; font-variant-numeric: tabular-nums; }
-.empty { padding: 38px 18px; text-align: center; }
-.empty h3 { font-size: 1rem; }
-.empty p, .methodology p { color: var(--muted); font-size: .875rem; margin-top: 6px; }
-.methodology, .warnings { margin-top: 15px; border: 1px solid var(--line); border-radius: 9px; padding: 12px 15px; }
-summary { cursor: pointer; font-weight: 650; font-size: .875rem; }
-.warnings { color: var(--amber); }
-.warnings ul { margin: 8px 0 0; padding-left: 21px; font-size: .83rem; overflow-wrap: anywhere; }
-@media (max-width: 860px) {
-  .shell { width: min(100% - 32px, 650px); }
-  main { padding-top: 30px; }
-  .intro { align-items: start; flex-direction: column; gap: 13px; }
-  .coverage { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 26px; }
-  .stat + .stat { border-left: 0; }
-  .stat:nth-child(even) { border-left: 1px solid var(--line); }
-  .stat:nth-child(n + 3) { border-top: 1px solid var(--line); }
-  .result-head { display: none; }
-  .opportunity:first-child { border-top: 0; }
-  .result-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 32px; gap: 13px 8px; padding: 13px 14px; }
-  .selection { grid-column: 1 / -2; }
-  .game { grid-row: 2; grid-column: 1 / -1; }
-  .details-toggle { grid-column: -2; grid-row: 1; }
-  .number-col { text-align: left; }
-  .metric-label { position: static; display: block; width: auto; height: auto; clip-path: none; font-size: .71rem; color: var(--muted); }
-  .edge { font-size: 1rem; }
-  .quote-details { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-inline: 14px; }
-}
-@media (max-width: 390px) {
-  .nav-links { gap: 12px; font-size: .8rem; }
-  .nav { gap: 10px; }
+@media (max-width: 365px) {
+  .metrics { grid-template-columns: 1fr 1fr; }
 }
 </style>
 </head>
 <body>
-<header class="topbar">
-  <nav class="nav shell" aria-label="Parlay Guard">
-    <a class="brand" href="/">Parlay Guard</a>
-    <div class="nav-links"><a href="/">Dashboard</a><a href="/portfolio">Multi-Sport Portfolio</a></div>
-  </nav>
-</header>
+<header class="top"><nav class="shell nav" aria-label="Parlay Guard">
+  <a class="brand" href="/">Parlay Guard</a>
+  <div class="nav-links"><a href="/">Dashboard</a><a href="/portfolio">Portfolio</a></div>
+</nav></header>
 <main class="shell">
-  <header class="intro">
-    <div><h1>Live EV Scanner</h1><p class="subtitle">Live and upcoming sports on Polymarket’s international exchange</p></div>
-    <p id="status" class="status" data-state="waiting" role="status">Waiting for first scan</p>
+  <header class="hero">
+    <div><h1>Live EV Scanner</h1><p>Scores, Polymarket prices, and screened EV by game.</p></div>
+    <p class="feed" id="feed" role="status">Waiting for data</p>
   </header>
-
-  <dl class="coverage" aria-label="Scan coverage">
-    <div class="stat"><dt>Games listed</dt><dd><span id="games">—</span><small id="live-games"></small></dd></div>
-    <div class="stat"><dt>Markets modeled</dt><dd id="modeled">—</dd></div>
-    <div class="stat"><dt>Sides with usable quotes</dt><dd id="priced">—</dd></div>
-    <div class="stat"><dt>Active markets cataloged</dt><dd><span id="cataloged">—</span><small id="catalog-status">Waiting</small></dd></div>
-  </dl>
-
-  <section aria-labelledby="results-title">
-    <div class="section-heading">
-      <div><h2 id="results-title">Games &amp; opportunities</h2><p class="section-meta" id="result-count" aria-live="polite">Waiting for games</p></div>
-      <div class="controls"><label><input type="checkbox" id="show-all"> Show all positive EV</label><label class="sr-only" for="sport-filter">Filter by sport or league</label><select class="sport-picker" id="sport-filter"><option value="">All sports</option></select>
-      <fieldset class="filters" id="filters">
-        <legend class="sr-only">Filter by game state</legend>
-        <label><input class="sr-only" type="radio" name="phase" value="all" checked>All</label>
-        <label><input class="sr-only" type="radio" name="phase" value="live">In play</label>
-        <label><input class="sr-only" type="radio" name="phase" value="pregame">Pregame</label>
-      </fieldset></div>
+  <div class="toolbar">
+    <div class="tabs" id="phases" role="group" aria-label="Game phase">
+      <button type="button" data-phase="all" aria-pressed="true">All games</button>
+      <button type="button" data-phase="live" aria-pressed="false">Live</button>
+      <button type="button" data-phase="pregame" aria-pressed="false">Upcoming</button>
     </div>
-    <div class="board" id="opportunities"></div>
-    <div class="empty results" id="empty"><h3 id="empty-title">Waiting for game data</h3><p id="empty-body">Games appear after a catalog scan finishes.</p></div>
-  </section>
-
-  <details class="warnings" id="warnings" hidden><summary id="warning-summary">Feed notices</summary><ul id="warning-list"></ul></details>
-  <details class="methodology" id="methodology">
-    <summary>How to read the estimates</summary>
-    <p><strong>Avg. ask</strong> is the estimated average entry price for $10 of orders before fees. Open a row to see the best ask, fee estimate, net EV, and quote age.</p>
-    <p><strong>Screened EV</strong> applies fees and subtracts five percentage points from the model probability. The default view shows the highest positive screened EV per game as a paper pick. The five-point adjustment is a fixed stress test. Break-even probability uses the estimated fee and fill price.</p>
-    <p id="calibration">Waiting for calibration details.</p>
-    <p>The sports catalog lists recent and upcoming fixtures through the next 36 hours. In-play estimates cover NBA regular-season games before the final regulation minute. College and pro estimates cover supported pregame markets that passed held-out probability checks. NFL moneyline probabilities include the expected half payout for ties. NHL, MLB and college spread and total probability tests used simulated lines. Research only.</p>
-  </details>
-</main>
-
-<template id="league-template">
-  <details class="league">
-    <summary><span data-field="league"></span><span class="league-count" data-field="count"></span></summary>
-    <div class="fixtures"></div>
-  </details>
-</template>
-<template id="fixture-template">
-  <article class="fixture">
-    <header class="fixture-header">
-      <div>
-        <h3 class="fixture-title" data-field="title"></h3>
-        <p class="fixture-meta"><span data-field="phase"></span><span data-field="markets"></span><a target="_blank" rel="noopener noreferrer" hidden>View markets</a></p>
+    <label class="sr-only" for="sport">Sport or league</label>
+    <select id="sport" class="control"><option value="">All leagues</option></select>
+    <label class="sr-only" for="search">Find a game</label>
+    <input id="search" class="control" type="search" placeholder="Find a team">
+  </div>
+  <div class="workspace">
+    <section class="panel" aria-labelledby="games-heading">
+      <header class="list-header"><h2 id="games-heading">Games</h2><p id="count"></p></header>
+      <div id="games"></div>
+      <p id="empty" class="placeholder">Waiting for games</p>
+    </section>
+    <section class="panel detail" id="detail" aria-label="Selected game">
+      <p id="no-selection" class="placeholder">Select a game to view its score and market prices.</p>
+      <div id="selected" hidden>
+        <header class="detail-header">
+          <div class="detail-meta"><p class="muted" id="league-name"></p><a id="market-link" class="market-link" target="_blank" rel="noopener noreferrer">View market</a></div>
+          <div class="match"><h2 id="game-title" tabindex="-1"></h2>
+            <div class="game-clock"><strong id="live-score"></strong><span id="score-order" class="muted"></span><span id="game-phase" class="muted"></span></div>
+          </div>
+        </header>
+        <div class="section">
+          <div class="section-title"><h3 id="odds-title">Moneyline prices</h3><p id="odds-age" class="muted"></p></div>
+          <dl class="quotes" id="quotes"></dl>
+          <p id="no-odds" class="muted"></p>
+        </div>
+        <div class="section">
+          <div class="section-title"><h3>Top paper pick</h3><p id="pick-age" class="muted"></p></div>
+          <p id="no-pick" class="muted"></p>
+          <div id="pick" hidden>
+            <p id="selection" class="selection"></p><p id="selection-market" class="selection-market"></p>
+            <dl class="metrics">
+              <div class="metric"><dt>Model probability</dt><dd id="probability"></dd></div>
+              <div class="metric"><dt>Avg. ask for $10</dt><dd id="ask"></dd></div>
+              <div class="metric"><dt>Screened EV</dt><dd id="ev" class="edge"></dd></div>
+            </dl>
+            <details class="alternatives" id="pick-details"><summary>Quote details</summary><dl class="metrics">
+              <div class="metric"><dt>Fee per share</dt><dd id="fee"></dd></div>
+              <div class="metric"><dt>Break-even probability</dt><dd id="break-even"></dd></div>
+              <div class="metric"><dt>Net EV before stress test</dt><dd id="net-ev"></dd></div>
+            </dl></details>
+          </div>
+          <details class="alternatives" id="alternatives" hidden><summary id="alternative-count"></summary><ul class="alt-list" id="alt-list"></ul></details>
+        </div>
       </div>
-      <span class="game-status" data-field="status"></span>
-    </header>
-    <div class="result-grid result-head" aria-hidden="true" hidden>
-      <span>Selection</span><span class="number-col">Model probability</span><span class="number-col">Avg. ask</span><span class="number-col">Screened EV</span><span></span>
-    </div>
-    <ol class="opportunities" aria-label="Opportunities ranked by screened EV"></ol>
-  </article>
-</template>
-<template id="opportunity-template">
-  <li class="opportunity">
-    <div class="result-grid">
-      <div class="selection"><span data-field="selection"></span><span class="secondary" data-field="pick"></span><span class="secondary" data-field="market"></span></div>
-      <div class="number-col"><span class="metric-label">Model probability</span><span class="metric-value" data-field="probability"></span></div>
-      <div class="number-col"><span class="metric-label">Avg. ask</span><span class="metric-value" data-field="ask"></span></div>
-      <div class="number-col"><span class="metric-label">Screened EV</span><span class="edge" data-field="edge"></span></div>
-      <button type="button" class="details-toggle" aria-expanded="false"></button>
-    </div>
-    <dl class="quote-details" hidden>
-      <div><dt>Best ask</dt><dd data-field="best-ask"></dd></div>
-      <div><dt>Fee per share</dt><dd data-field="fee"></dd></div>
-      <div><dt>Net EV</dt><dd data-field="net-ev"></dd></div>
-      <div><dt>Screened probability</dt><dd data-field="screened-probability"></dd></div>
-      <div><dt>Break-even probability</dt><dd data-field="break-even"></dd></div>
-      <div><dt>Quote age</dt><dd data-field="quote-age"></dd></div>
-    </dl>
-  </li>
-</template>
-
+    </section>
+  </div>
+  <details class="footer-detail"><summary>How prices and EV are shown</summary>
+    <p>Moneyline prices show recent best asks before fees. A price move compares the latest ask with the previous observed ask. EV uses depth for a $10 order, estimated fees, and a five-percentage-point probability stress test. NFL moneyline model probabilities account for the expected half payout on ties.</p>
+    <p>Live EV is available for supported NBA regular-season markets before the final regulation minute. College, NFL, NHL, and MLB models cover supported pregame markets. Live scores and moneyline prices can continue for games without live EV.</p>
+  </details>
+  <details class="footer-detail" id="feed-notices" hidden><summary>Feed notices</summary><ul id="warnings"></ul></details>
+</main>
 <script>
-const byId = id => document.getElementById(id);
-const numbers = new Intl.NumberFormat();
-const money = new Intl.NumberFormat(undefined, {style: 'currency', currency: 'USD', minimumFractionDigits: 3, maximumFractionDigits: 3});
-const time = new Intl.DateTimeFormat(undefined, {hour: 'numeric', minute: '2-digit', second: '2-digit', timeZoneName: 'short'});
-const QUOTE_WINDOW_MS = 35000;
-const list = byId('opportunities');
-const template = byId('opportunity-template');
-const leagues = new Map();
-const fixtures = new Map();
-let lastLeagueOptions = '';
-let lastSelectedLeague = '';
-let snapshot = null;
+const $ = id => document.getElementById(id);
+const WINDOW_MS = 35000;
+const clockTime = new Intl.DateTimeFormat(undefined, {hour:'numeric', minute:'2-digit', second:'2-digit'});
+const tipTime = new Intl.DateTimeFormat(undefined, {weekday:'short', hour:'numeric', minute:'2-digit', timeZoneName:'short'});
+const age = (value, now) => now - Date.parse(value);
+const fresh = (value, now) => age(value, now) >= -5000 && age(value, now) <= WINDOW_MS;
+const price = value => Number.isFinite(value) ? '$' + value.toFixed(3) : '—';
+const pct = value => Number.isFinite(value) ? (100 * value).toFixed(1) + '%' : '—';
+const edge = value => (value > 0 ? '+' : '') + pct(value);
+const seconds = (value, now) => Math.max(0, Math.floor(age(value, now) / 1000)) + 's ago';
+const validSlug = /^[a-z0-9][a-z0-9-]*$/;
+
+let snapshot = {};
+let phase = 'all';
+let chosen = '';
+let selectedGame = '';
+let listFingerprint = '';
+let leaguesFingerprint = '';
+let quotesFingerprint = '';
+let alternativesFingerprint = '';
+let warningsFingerprint = '';
 let loading = false;
-let unavailable = false;
-let rowId = 0;
+let offline = false;
+const previousPrices = new Map();
 
-function setText(element, text) {
-  if (element.textContent !== text) element.textContent = text;
+function text(id, value) {
+  const element = $(id);
+  if (element.textContent !== value) element.textContent = value;
 }
 
-function count(value) {
-  return Number.isFinite(value) ? numbers.format(value) : '—';
+function element(tag, value, className) {
+  const item = document.createElement(tag);
+  if (className) item.className = className;
+  item.textContent = value;
+  return item;
 }
 
-function percent(value, signed = false) {
-  if (!Number.isFinite(value)) return '—';
-  return (signed && value > 0 ? '+' : '') + (value * 100).toFixed(1) + '%';
-}
-
-function price(value) {
-  return Number.isFinite(value) ? money.format(value) : '—';
-}
-
-function isFresh(timestamp, now) {
-  const age = now - Date.parse(timestamp);
-  return age >= -5000 && age <= QUOTE_WINDOW_MS;
-}
-
-function buildRow() {
-  const node = template.content.firstElementChild.cloneNode(true);
-  const fields = Object.fromEntries([...node.querySelectorAll('[data-field]')]
-    .map(element => [element.dataset.field, element]));
-  const button = node.querySelector('button');
-  const details = node.querySelector('dl');
-  details.id = 'quote-details-' + (++rowId);
-  button.setAttribute('aria-controls', details.id);
-  button.addEventListener('click', () => {
-    details.hidden = !details.hidden;
-    button.setAttribute('aria-expanded', String(!details.hidden));
-  });
-  return {node, fields, button};
-}
-
-function updateRow(row, opportunity, now) {
-  const age = Math.max(0, Math.floor((now - Date.parse(opportunity.quote_utc)) / 1000));
-  const label = opportunity.side + ' · ' + opportunity.matchup;
-  const fields = {
-    selection: opportunity.side,
-    pick: opportunity.topPick ? "Top paper pick" : "",
-    market: opportunity.market,
-    probability: percent(opportunity.probability) + (opportunity.half_payout_tie ? " (payout-adjusted)" : ""),
-    ask: price(opportunity.ask),
-    edge: percent(opportunity.screened_ev, true),
-    'best-ask': price(opportunity.best_ask),
-    fee: price(opportunity.fee_per_share),
-    'net-ev': percent(opportunity.ev, true),
-    'screened-probability': percent(opportunity.screened_probability),
-    'break-even': percent(opportunity.break_even_probability),
-    'quote-age': age + 's',
-  };
-  for (const [key, value] of Object.entries(fields)) setText(row.fields[key], value);
-  row.button.setAttribute('aria-label', 'Quote details for ' + label);
-}
-
-const NBA_LEAGUE = 'Basketball|NBA';
-
-function fieldsFor(node) {
-  return Object.fromEntries([...node.querySelectorAll('[data-field]')]
-    .map(element => [element.dataset.field, element]));
-}
-
-function syncOrder(parent, nodes) {
-  const wanted = new Set(nodes);
-  let position = parent.firstElementChild;
-  for (const node of nodes) {
-    if (node !== position) parent.insertBefore(node, position);
-    position = node.nextElementSibling;
-  }
-  for (const node of [...parent.children]) {
-    if (!wanted.has(node)) node.remove();
-  }
-}
-
-function renderRows(fixture, entries, now) {
-  const nodes = [];
-  const wanted = new Set();
-  for (const entry of entries) {
-    const key = entry.token_id || [entry.event, entry.market, entry.side].join('|');
-    if (wanted.has(key)) continue;
-    wanted.add(key);
-    let row = fixture.rows.get(key);
-    if (!row) {
-      row = buildRow();
-      fixture.rows.set(key, row);
-    }
-    updateRow(row, entry, now);
-    nodes.push(row.node);
-  }
-  syncOrder(fixture.list, nodes);
-  for (const key of fixture.rows.keys()) {
-    if (!wanted.has(key)) fixture.rows.delete(key);
-  }
-  fixture.columns.hidden = nodes.length === 0;
-  return nodes.length;
-}
-
-function mergeGames(state, fresh, now) {
+function currentGames(now) {
   const games = new Map();
-  const catalogAt = Date.parse(state.sports?.observed_utc);
-  const catalogRecent = now - catalogAt <= 180000;
-  for (const item of state.sports?.games || []) {
-    if (now - Date.parse(item.start_utc) > 18 * 3600000) continue;
-    const phase = Date.parse(item.start_utc) > now ? item.phase
-      : item.phase === 'live' && catalogRecent ? 'live' : 'unknown';
-    games.set(item.event, {...item, phase, entries: []});
+  const add = game => games.set(game.event, {...games.get(game.event), ...game});
+  const feed = snapshot.sports;
+  const catalogAge = age(feed?.observed_utc, now);
+  for (const row of feed?.games || []) {
+    if (age(row.start_utc, now) > 18 * 3600000) continue;
+    const current = catalogAge >= -5000 && catalogAge <= 180000;
+    const live = current && row.phase === 'live';
+    const upcoming = row.phase === 'pregame' && Date.parse(row.start_utc) > now;
+    add({...row, phase: live ? 'live' : upcoming ? 'pregame' : 'unknown',
+      score_text: live ? row.score_text : '', clock_text: live ? row.clock_text : '', period_text: live ? row.period_text : ''});
   }
-  if (fresh) {
-    for (const game of state.games || []) {
-      const earlier = games.get(game.event);
-      games.set(game.event, {...earlier, ...game, title: earlier?.title || game.title,
-        open_markets: Math.max(earlier?.open_markets || 0, game.open_markets || 0), entries: []});
-    }
-    for (const opportunity of state.opportunities || []) {
-      if (!isFresh(opportunity.quote_utc, now)) continue;
-      if (!games.has(opportunity.event)) {
-        games.set(opportunity.event, {event: opportunity.event, slug: opportunity.event,
-          title: opportunity.matchup, sport: 'Basketball', league: 'NBA', phase: opportunity.phase,
-          score_text: opportunity.score?.join('–'), period_text: opportunity.period ? 'Q' + opportunity.period : '',
-          clock_text: opportunity.clock, entries: []});
-      }
-      const game = games.get(opportunity.event);
-      if (opportunity.phase === 'pregame' && Date.parse(game.start_utc) <= now) continue;
-      const topPick = state.top_picks?.[opportunity.event] === opportunity.token_id;
-      if (topPick || byId('show-all').checked) game.entries.push({...opportunity, topPick});
+  for (const game of snapshot.board || []) {
+    if (!games.has(game.event)) continue;
+    const {moneyline_quotes, ...score} = game;
+    add({event: game.event, odds: moneyline_quotes});
+    const scoreAge = age(score.score_utc, now);
+    if (scoreAge >= -5000 && (score.phase === 'final' || scoreAge <= 180000)) add(score);
+  }
+  // The NBA model snapshot is also a scoreboard feed. Honor newer confirmed state and
+  // never restore a pregame view over a live/final game supplied by the board.
+  for (const game of !snapshot.stale && fresh(snapshot.updated_utc, now) ? snapshot.games || [] : []) {
+    const prior = games.get(game.event);
+    if (prior?.phase === 'final' || (prior?.phase === 'live' && game.phase === 'pregame')) continue;
+    if (game.phase === 'pregame' && Date.parse(game.start_utc) <= now) continue;
+    if (prior?.score_utc && Date.parse(prior.score_utc) > Date.parse(game.state_observed_utc || snapshot.updated_utc)) continue;
+    add({...game, title: prior?.title || game.title, score_order: game.score_order || "", score_utc: null});
+  }
+  for (const game of games.values()) game.entries = [];
+  if (!offline) {
+    for (const row of snapshot.opportunities || []) {
+      const game = games.get(row.event);
+      if (game?.phase !== row.phase || !fresh(row.quote_utc, now)) continue;
+      const score = game.score_utc && game.score_text?.match(/^(\d+)\s*[-–]\s*(\d+)$/);
+      if (row.phase === 'live' && score && (Number(score[1]) !== row.score?.[1] || Number(score[2]) !== row.score?.[0])) continue;
+      game.entries.push(row);
     }
   }
   return games;
 }
 
-function leagueKey(game) {
-  return game.sport + '|' + game.league;
+function updateLeagueOptions(games) {
+  const values = [...new Set([...games.values()].map(game => game.league).filter(Boolean))].sort();
+  const key = JSON.stringify(values);
+  if (key === leaguesFingerprint) return;
+  leaguesFingerprint = key;
+  const selected = $('sport').value;
+  $('sport').replaceChildren(new Option('All leagues', ''), ...values.map(value => new Option(value)));
+  if (values.includes(selected)) $('sport').value = selected;
 }
 
-function leagueLabel(sport, league) {
-  return sport === league ? sport : sport + ' · ' + league;
-}
-
-function updateLeagueFilter(games) {
-  const select = byId('sport-filter');
-  const options = new Map();
-  for (const game of games.values()) options.set(leagueKey(game), leagueLabel(game.sport, game.league));
-  const ordered = [...options].sort((a, b) => a[1].localeCompare(b[1]));
-  const next = JSON.stringify(ordered);
-  if (next === lastLeagueOptions) return;
-  lastLeagueOptions = next;
-  const selected = select.value;
-  select.replaceChildren(new Option('All sports', ''), ...ordered.map(([key, label]) => new Option(label, key)));
-  if (options.has(selected)) select.value = selected;
-}
-
-function renderFixture(game, now) {
-  let view = fixtures.get(game.event);
-  if (!view) {
-    const node = byId('fixture-template').content.firstElementChild.cloneNode(true);
-    view = {node, fields: fieldsFor(node), list: node.querySelector('ol'), columns: node.querySelector('.result-head'),
-      link: node.querySelector('a'), rows: new Map()};
-    fixtures.set(game.event, view);
+function phaseLabel(game) {
+  if (game.phase === 'live') return ['Live', game.period_text, game.clock_text].filter(Boolean).join(' · ');
+  if (game.phase === 'final') return 'Final';
+  if (game.phase === 'pregame' && Number.isFinite(Date.parse(game.start_utc))) {
+    return tipTime.format(new Date(game.start_utc));
   }
-  const {fields, link} = view;
-  setText(fields.title, game.title);
-  fields.phase.dataset.live = String(game.phase === 'live');
-  const tip = Date.parse(game.start_utc);
-  const displayTime = Number.isFinite(tip) ? new Date(tip).toLocaleString(undefined, {weekday:'short', hour:'numeric', minute:'2-digit', timeZoneName:'short'}) : '';
-  const phase = game.phase === 'live' ? ['In play', game.score_text, game.period_text, game.clock_text].filter(Boolean).join(' · ')
-    : game.phase === 'pregame' ? ['Pregame', displayTime].filter(Boolean).join(' · ') : 'Live status unavailable';
-  setText(fields.phase, phase);
-  setText(fields.markets, Number.isFinite(game.open_markets) ? count(game.open_markets) + ' open markets' : '');
-  link.hidden = !/^[a-z0-9][a-z0-9-]*$/.test(game.slug || '');
-  if (!link.hidden) link.href = 'https://polymarket.com/event/' + game.slug;
-  const displayed = renderRows(view, game.entries, now);
-  setText(fields.status, displayed ? (byId('show-all').checked ? count(displayed) + ' positive EV' : 'Top paper pick')
-    : game.priced_sides ? 'No positive EV' : game.modeled_markets ? 'Waiting for usable quotes'
-    : (game.college || game.pro) && game.phase === 'live' ? 'EV available pregame only'
-    : leagueKey(game) !== NBA_LEAGUE && !game.college && !game.pro ? 'EV model unavailable'
-    : 'Waiting for model or market data');
-  return view.node;
+  return 'Awaiting score feed';
 }
 
-function renderBoard(games, now) {
-  updateLeagueFilter(games);
-  const phase = byId('filters').querySelector('input:checked').value;
-  const selected = byId('sport-filter').value;
-  const groups = new Map();
-  let totalGames = 0;
-  let positive = 0;
-  for (const game of games.values()) {
-    const key = leagueKey(game);
-    if ((selected && selected !== key) || (phase !== 'all' && phase !== game.phase)) continue;
-    if (!groups.has(key)) groups.set(key, {label:leagueLabel(game.sport, game.league), games:[], positive:0});
-    const group = groups.get(key);
-    group.games.push(game);
-    group.positive += game.entries.length;
-    totalGames++;
-    positive += game.entries.length;
-  }
-  const sections = [];
-  for (const [key, group] of [...groups].sort((a,b) => b[1].positive - a[1].positive || a[1].label.localeCompare(b[1].label))) {
-    let view = leagues.get(key);
-    if (!view) {
-      const node = byId('league-template').content.firstElementChild.cloneNode(true);
-      view = {node, fields: fieldsFor(node), body: node.querySelector('.fixtures')};
-      leagues.set(key, view);
-      node.open = Boolean(group.positive || key === NBA_LEAGUE || selected);
+function topPick(game) {
+  const token = snapshot.top_picks?.[game.event];
+  return game.entries.find(row => row.token_id === token) || game.entries[0];
+}
+
+function renderList(games) {
+  const data = games.map(game => [game.event, game.title, game.league, game.phase, game.score_text, phaseLabel(game), topPick(game)?.screened_ev]);
+  const key = JSON.stringify([chosen, data]);
+  if (key === listFingerprint) return;
+  listFingerprint = key;
+  const parent = $('games');
+  const focused = document.activeElement?.dataset?.event;
+  const scroll = parent.scrollTop;
+  const buttons = data.map(([event, title, league, gamePhase, score, label, ev]) => {
+    const button = element('button', '', 'game');
+    button.type = 'button';
+    button.dataset.event = event;
+    button.setAttribute('aria-current', String(event === chosen));
+    button.append(element('strong', title), element('span', score || '', 'score'),
+      element('span', [league, label].filter(Boolean).join(' · '), gamePhase === 'live' ? 'meta is-live' : 'meta'),
+      element('span', Number.isFinite(ev) ? edge(ev) : '', 'edge'));
+    return button;
+  });
+  parent.replaceChildren(...buttons);
+  parent.scrollTop = scroll;
+  if (focused) buttons.find(button => button.dataset.event === focused)?.focus({preventScroll:true});
+}
+
+function renderOdds(game, now) {
+  const quotes = (game.odds || []).filter(quote => !offline && game.phase !== 'final' && fresh(quote.quote_utc, now));
+  const display = quotes.map(quote => {
+    let previous = previousPrices.get(quote.token_id);
+    if (!previous || Date.parse(quote.quote_utc) > previous.time) {
+      const move = previous ? quote.ask - previous.ask : 0;
+      previous = {ask:quote.ask, time:Date.parse(quote.quote_utc), move};
+      previousPrices.set(quote.token_id, previous);
     }
-    if (selected && selected !== lastSelectedLeague) view.node.open = true;
-    setText(view.fields.league, group.label);
-    setText(view.fields.count, count(group.games.length) + ' games' + (group.positive ? ' · ' + count(group.positive) + (byId('show-all').checked ? ' positive EV' : ' paper picks') : ''));
-    group.games.sort((a,b) => Number(b.phase === 'live') - Number(a.phase === 'live')
-      || Number(Boolean(b.entries.length)) - Number(Boolean(a.entries.length))
-      || String(a.start_utc || '').localeCompare(String(b.start_utc || '')));
-    syncOrder(view.body, group.games.map(game => renderFixture(game, now)));
-    sections.push(view.node);
+    return {...quote, change: previous.move};
+  });
+  const key = JSON.stringify(display);
+  if (key !== quotesFingerprint) {
+    quotesFingerprint = key;
+    $('quotes').replaceChildren(...display.map(quote => {
+      const tile = element('div', '', 'quote');
+      const value = element('dd', price(quote.ask));
+      if (Math.abs(quote.change) >= .001) {
+        const up = quote.change > 0;
+        const movement = element('small', (up ? '↑ ' : '↓ ') + price(Math.abs(quote.change)));
+        movement.dataset.move = up ? 'up' : 'down';
+        movement.setAttribute('aria-label', (up ? 'Up ' : 'Down ') + price(Math.abs(quote.change)));
+        value.append(movement);
+      }
+      tile.append(element('dt', quote.side), value);
+      return tile;
+    }));
   }
-  syncOrder(list, sections);
-  lastSelectedLeague = selected;
-  for (const key of fixtures.keys()) if (!games.has(key)) fixtures.delete(key);
-  return {totalGames, positive};
+  text('odds-title', game.phase === 'live' ? 'Live moneyline prices' : 'Moneyline prices');
+  $('no-odds').hidden = display.length > 0;
+  text('no-odds', game.phase === 'final' ? 'Game ended' : 'Waiting for fresh moneyline asks');
+  const oldest = display.reduce((earliest, quote) => Date.parse(quote.quote_utc) < Date.parse(earliest) ? quote.quote_utc : earliest, display[0]?.quote_utc);
+  text('odds-age', oldest ? 'Best ask · ' + seconds(oldest, now) : '');
+}
+
+function noPickMessage(game) {
+  if (game.phase === 'final') return 'Game ended';
+  if (game.phase === 'live' && (game.league !== 'NBA')) return 'Live EV unavailable for this league';
+  if (game.priced_sides) return 'No fresh positive EV pick';
+  if (!game.college && !game.pro && game.league !== 'NBA') return 'EV model unavailable for this league';
+  return 'Waiting for an eligible game state and fresh quotes';
+}
+
+function renderDetail(game, now) {
+  $('selected').hidden = !game;
+  $('no-selection').hidden = Boolean(game);
+  if (!game) return;
+  if (selectedGame !== game.event) {
+    selectedGame = game.event;
+    $('alternatives').open = false;
+    $('pick-details').open = false;
+  }
+  text('league-name', [game.sport, game.league !== game.sport ? game.league : ''].filter(Boolean).join(' · '));
+  text('game-title', game.title);
+  text('live-score', game.score_text || '');
+  text('score-order', game.score_text ? (game.score_order || '') : '');
+  text('game-phase', game.phase === 'pregame' ? 'Pregame · ' + phaseLabel(game) : phaseLabel(game));
+  $('game-phase').classList.toggle('is-live', game.phase === 'live');
+  const slug = game.slug || game.event;
+  $('market-link').hidden = !validSlug.test(slug);
+  if (!$('market-link').hidden) $('market-link').href = 'https://polymarket.com/event/' + slug;
+  renderOdds(game, now);
+
+  const pick = topPick(game);
+  $('pick').hidden = !pick;
+  $('no-pick').hidden = Boolean(pick);
+  text('no-pick', pick ? '' : noPickMessage(game));
+  text('pick-age', pick ? seconds(pick.quote_utc, now) : '');
+  if (pick) {
+    text('selection', pick.side);
+    text('selection-market', pick.market);
+    text('probability', pct(pick.probability));
+    text('ask', price(pick.ask));
+    text('ev', edge(pick.screened_ev));
+    text('fee', price(pick.fee_per_share));
+    text('break-even', pct(pick.break_even_probability));
+    text('net-ev', edge(pick.ev));
+  }
+  const alternatives = pick ? game.entries.filter(row => row.token_id !== pick.token_id) : [];
+  $('alternatives').hidden = alternatives.length === 0;
+  text('alternative-count', 'Other positive EV markets (' + alternatives.length + ')');
+  const comparison = alternatives.map(row => [row.side, row.market, row.screened_ev, row.ask, row.probability]);
+  const key = JSON.stringify(comparison);
+  if (key !== alternativesFingerprint) {
+    alternativesFingerprint = key;
+    $('alt-list').replaceChildren(...comparison.map(([side, market, value, ask, probability]) => {
+      const item = element('li', '');
+      const numbers = element('div', '', 'numbers');
+      numbers.append(element('strong', edge(value), 'edge'), element('small', price(ask) + ' ask · ' + pct(probability) + ' model'));
+      item.append(element('span', [side, market].join(' · ')), numbers);
+      return item;
+    }));
+  }
 }
 
 function render() {
   const now = Date.now();
-  const state = snapshot || {};
-  const catalog = state.catalog || {};
-  const coverage = state.coverage || {};
-  const status = byId('status');
-  const fresh = !unavailable && !state.stale && isFresh(state.updated_utc, now);
-  status.dataset.state = unavailable ? 'error' : fresh ? 'fresh' : state.updated_utc ? 'stale' : 'waiting';
-  setText(status, unavailable ? 'Scanner temporarily unavailable' : fresh ? 'Updated ' + time.format(new Date(state.updated_utc))
-    : state.updated_utc ? 'Waiting for a fresh scan' : 'Waiting for first scan');
-
-  const games = mergeGames(state, fresh, now);
-  setText(byId('games'), count(games.size));
-  setText(byId('live-games'), count([...games.values()].filter(game => game.phase === 'live').length) + ' in play');
-  setText(byId('modeled'), count(coverage.modeled_markets));
-  setText(byId('priced'), count(coverage.priced_sides));
-  setText(byId('cataloged'), count(catalog.cataloged));
-  setText(byId('catalog-status'), ({complete:'Catalog pass complete', scanning:'Scan in progress', partial:'Partial catalog'})[catalog.status] || 'Waiting');
-
-  const calibration = state.calibration;
-  setText(byId('calibration'), calibration
-    ? 'Calibrated on ' + calibration.calibration_season + ' NBA play-by-play and tested on ' +
-      count(calibration.holdout_games) + ' games from ' + calibration.holdout_season +
-      '. Spread and total tests used simulated lines. Historical in-play returns remain unverified.'
-    : 'In-play estimates require a loaded NBA calibration.');
-
-  const warnings = [...(state.warnings || [])];
-  if (state.sports?.status === 'partial') warnings.push('Polymarket sports catalog is incomplete.');
-  byId('warnings').hidden = warnings.length === 0;
-  setText(byId('warning-summary'), 'Feed notices (' + warnings.length + ')');
-  const warningList = byId('warning-list');
-  const warningContent = JSON.stringify(warnings);
-  if (warningContent !== warningList.dataset.messages) {
-    warningList.dataset.messages = warningContent;
-    warningList.replaceChildren(...warnings.map(message => {
-      const item = document.createElement('li');
-      item.textContent = message;
-      return item;
-    }));
+  const timestamps = [snapshot.updated_utc, ...(snapshot.board || []).flatMap(game =>
+    [game.phase === 'live' ? game.score_utc : null, ...game.moneyline_quotes.map(row => row.quote_utc)])];
+  const live = !offline && timestamps.some(value => fresh(value, now));
+  $('feed').dataset.live = String(live);
+  const updated = Math.max(...timestamps.filter(value => fresh(value, now)).map(Date.parse));
+  text('feed', offline ? 'Connection interrupted' : live ? 'Updated ' + clockTime.format(new Date(updated)) : 'Waiting for fresh data');
+  const games = currentGames(now);
+  updateLeagueOptions(games);
+  const query = $('search').value.trim().toLowerCase();
+  const league = $('sport').value;
+  const phases = {live:0, pregame:1, unknown:2, final:3};
+  const filtered = [...games.values()].filter(game => (!league || game.league === league)
+    && (phase === 'all' || game.phase === phase) && (game.title || '').toLowerCase().includes(query));
+  filtered.sort((a,b) => (phases[a.phase] ?? 4) - (phases[b.phase] ?? 4)
+    || String(a.start_utc).localeCompare(String(b.start_utc)) || a.event.localeCompare(b.event));
+  if (!filtered.some(game => game.event === chosen)) chosen = filtered[0]?.event || '';
+  text('count', filtered.length + ' shown');
+  $('empty').hidden = filtered.length > 0;
+  text('empty', games.size ? 'No games match these filters' : 'Waiting for games');
+  renderList(filtered);
+  renderDetail(games.get(chosen), now);
+  const warnings = snapshot.warnings || [];
+  const warningKey = JSON.stringify(warnings);
+  if (warningKey !== warningsFingerprint) {
+    warningsFingerprint = warningKey;
+    $('feed-notices').hidden = warnings.length === 0;
+    $('warnings').replaceChildren(...warnings.map(warning => element('li', warning)));
   }
-
-  const {totalGames, positive} = renderBoard(games, now);
-  byId('empty').hidden = totalGames > 0;
-  setText(byId('result-count'), totalGames
-    ? count(totalGames) + ' games shown · ' + count(positive) + (byId('show-all').checked ? ' positive EV estimates' : ' paper picks')
-    : 'No games shown');
-  const title = games.size ? 'No games match these filters'
-    : unavailable ? 'Scanner temporarily unavailable' : 'Waiting for games';
-  const description = games.size ? 'Choose another sport or game state.'
-    : 'Games appear when the sports catalog or NBA feed returns a fresh slate.';
-  setText(byId('empty-title'), title);
-  setText(byId('empty-body'), description);
 }
 
 async function refresh() {
   if (loading) return;
   loading = true;
   try {
-    const response = await fetch('/api/inplay/opportunities', {cache: 'no-store', signal: AbortSignal.timeout(8000)});
-    if (!response.ok) throw Error(response.status);
+    const response = await fetch('/api/inplay/opportunities', {cache:'no-store', signal:AbortSignal.timeout(8000)});
+    if (!response.ok) throw new Error(response.status);
     snapshot = await response.json();
-    unavailable = false;
+    offline = false;
   } catch {
-    unavailable = true;
+    offline = true;
   } finally {
     loading = false;
     render();
   }
 }
 
-byId('filters').addEventListener('change', render);
-byId('sport-filter').addEventListener('change', render);
-byId('show-all').addEventListener('change', render);
+$('phases').addEventListener('click', event => {
+  const button = event.target.closest('button[data-phase]');
+  if (!button) return;
+  phase = button.dataset.phase;
+  for (const tab of $('phases').querySelectorAll('button')) tab.setAttribute('aria-pressed', String(tab === button));
+  render();
+});
+$('sport').addEventListener('change', render);
+$('search').addEventListener('input', render);
+$('games').addEventListener('click', event => {
+  const game = event.target.closest('button[data-event]');
+  if (!game) return;
+  chosen = game.dataset.event;
+  render();
+  if (window.matchMedia('(max-width: 700px)').matches) $('game-title').focus();
+});
 refresh();
 setInterval(refresh, 5000);
 setInterval(render, 1000);

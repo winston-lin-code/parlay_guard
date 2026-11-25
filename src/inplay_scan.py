@@ -317,6 +317,7 @@ def scan_opportunities():
                    "title": f"{game['away']} @ {game['home']}", "start_utc": game["tip"].isoformat(),
                    "phase": "live" if game["phase"] == "in" else "pregame",
                    "score_text": f"{int(game['away_score'])}–{int(game['home_score'])}" if game["phase"] == "in" else "",
+                   "score_order": f"{game['away']} / {game['home']}" if game["phase"] == "in" else "",
                    "clock_text": game["clock"] or "",
                    "period_text": f"Q{int(game['period'])}" if game["phase"] == "in" else "",
                    "open_markets": 0, "modeled_markets": 0, "priced_sides": 0}

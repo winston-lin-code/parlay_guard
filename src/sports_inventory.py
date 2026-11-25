@@ -3,11 +3,12 @@
 import re
 from datetime import datetime, timedelta, timezone
 
-from .inplay_scan import GAMMA, read_json, utc
+from .inplay_scan import GAMMA, array, read_json, utc
 from .college_sources import LEAGUES
 from .pro_ev_scan import PRO_SERIES
 
 SPORTS_TAG = 1
+PARTIAL_MONEYLINE = re.compile(r"first|second half|quarter|regulation only|excludes? overtime", re.I)
 SPORT_LABELS = {
     "american-football": "American football", "football": "American football",
     "nfl": "American football", "cfb": "American football", "ncaaf": "American football",
@@ -37,6 +38,23 @@ def league_index(records):
         if series.isdigit() and label:
             leagues[series] = label
     return leagues
+
+
+def _moneyline(markets, start, active):
+    contracts = []
+    for market in markets:
+        scheduled = utc(market.get("gameStartTime"))
+        if (market.get("sportsMarketType") != "moneyline" or str(market.get("id")) not in active
+                or scheduled is None or abs(scheduled - start) > timedelta(minutes=30)
+                or PARTIAL_MONEYLINE.search(str(market.get("question") or ""))):
+            continue
+        labels = array(market.get("outcomes"))
+        ids = [str(token) for token in array(market.get("clobTokenIds"))]
+        if (len(labels) == len(ids) == 2 and len(set(ids)) == 2 and all(token.isdigit() for token in ids)
+                and all(isinstance(label, str) and label.strip().lower() not in ("", "yes", "no") for label in labels)
+                and len({label.strip().lower() for label in labels}) == 2):
+            contracts.append(list(zip(labels, ids)))
+    return contracts[0] if len(contracts) == 1 else []
 
 
 def _fixture(event, now, leagues):
@@ -80,6 +98,8 @@ def _fixture(event, now, leagues):
             "clock_text": str(event.get("elapsed") or "") if phase == "live" else "",
             "period_text": str(event.get("period") or "") if phase == "live" else "",
             "open_market_ids": active, "college": college, "pro": pro,
+            "moneyline": _moneyline(markets, start, active) if slug == key else [],
+            "sports_game_id": event.get("gameId") if type(event.get("gameId")) is int else None,
             "college_markets": [{field: market.get(field) for field in COLLEGE_FIELDS}
                                 for market in markets if (college or pro) and str(market.get("id")) in active
                                 and market.get("sportsMarketType") in ("moneyline", "spreads", "totals")]}
@@ -99,6 +119,8 @@ def add_fixtures(fixtures, events, now, leagues):
         preferred = row if row["slug"] == key else previous
         other = previous if preferred is row else row
         preferred["open_market_ids"].update(other["open_market_ids"])
+        if preferred["sports_game_id"] is None:
+            preferred["sports_game_id"] = other["sports_game_id"]
         if (other["college"] or other["pro"]) == (preferred["college"] or preferred["pro"]):
             preferred["college_markets"] = list({market["id"]: market for market in
                                                  [*other["college_markets"], *preferred["college_markets"]]}.values())
