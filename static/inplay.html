@@ -3,130 +3,364 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#101714">
 <title>Live EV Scanner | Parlay Guard</title>
 <style>
-:root{color-scheme:dark;--bg:#10171b;--panel:#172128;--ink:#eef4f2;--muted:#a3b8b9;--line:#30424c;--green:#92ebbc;--amber:#e8c88a}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,sans-serif}
-main{max-width:1200px;margin:auto;padding:30px 24px 60px}
-nav{display:flex;gap:24px;padding-bottom:28px}a{color:var(--green)}
-h1{font-size:clamp(28px,5vw,42px);line-height:1.1;margin:0 0 10px}h2{font-size:17px;margin:0}
-p{margin:8px 0;color:var(--muted)}
-.status{color:var(--amber);min-height:24px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:24px 0}
-.card,.results{border:1px solid var(--line);background:var(--panel);border-radius:10px}
-.card{padding:13px 16px}.card span{display:block;color:var(--muted)}.card b{font-size:22px}
-.results header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;flex-wrap:wrap}
-select{background:var(--bg);color:var(--ink);border:1px solid var(--line);padding:7px;border-radius:5px}
-.scroll{overflow-x:auto}table{border-collapse:collapse;width:100%;white-space:nowrap}
-th,td{text-align:left;padding:10px 12px;border-top:1px solid var(--line);font-variant-numeric:tabular-nums}
-th{font-size:12px;color:var(--muted)}td strong{display:block}td small{display:block;color:var(--muted)}.positive{color:var(--green)}
-#empty,#warnings{margin:12px 16px}#warnings{color:var(--amber)}footer{margin-top:18px;font-size:13px}
+:root {
+  color-scheme: dark;
+  --bg: #101714;
+  --surface: #17211c;
+  --raised: #1d2b23;
+  --line: #34463a;
+  --text: #f1f5f0;
+  --muted: #a9b9ae;
+  --green: #c0ed9b;
+  --amber: #f0c981;
+  --danger: #ffb5a4;
+  font: 16px/1.45 system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--text); }
+a { color: inherit; text-underline-offset: 4px; }
+a:hover { color: var(--green); }
+a:focus-visible, label:has(input:focus-visible), summary:focus-visible, button:focus-visible {
+  outline: 2px solid var(--green); outline-offset: 4px;
+}
+.shell { width: min(100% - 64px, 1140px); margin-inline: auto; }
+.topbar { border-bottom: 1px solid var(--line); }
+.nav { display: flex; justify-content: space-between; gap: 18px; align-items: center; min-height: 69px; }
+.brand { font-weight: 760; letter-spacing: -.025em; text-decoration: none; }
+.nav-links { display: flex; flex-wrap: wrap; gap: 22px; color: var(--muted); font-size: .875rem; }
+.nav-links a { text-decoration: none; }
+main { padding-block: 46px 64px; }
+.intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 27px; }
+h1, h2, h3, p { margin: 0; }
+h1 { font-size: clamp(2.25rem, 5vw, 3.65rem); line-height: 1.04; letter-spacing: -.061em; }
+h2 { font-size: 1.3rem; letter-spacing: -.028em; }
+.subtitle { color: var(--muted); margin-top: 10px; }
+.status {
+  display: flex; align-items: center; gap: 9px; width: fit-content; flex-shrink: 0; padding: 9px 12px;
+  color: var(--muted); font-size: .835rem; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+}
+.status::before { content: ""; width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: currentColor; }
+.status[data-state="fresh"] { color: var(--green); }
+.status[data-state="stale"] { color: var(--amber); }
+.status[data-state="error"] { color: var(--danger); }
+.coverage {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 0 36px; padding: 0;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+}
+.stat { min-width: 0; padding: 15px 18px; }
+.stat + .stat { border-left: 1px solid var(--line); }
+.stat dt { color: var(--muted); font-size: .8125rem; }
+.stat dd { margin: 4px 0 0; font-size: 1.6rem; line-height: 1.2; font-weight: 720; letter-spacing: -.035em; }
+.stat small { display: block; min-height: 1.3em; margin-top: 4px; color: var(--muted); font-size: .75rem; font-weight: 450; letter-spacing: normal; }
+.section-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: 14px; margin-bottom: 13px; }
+.section-meta { color: var(--muted); font-size: .84rem; margin-top: 4px; }
+.filters { display: flex; flex-wrap: wrap; gap: 3px; margin: 0; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+.filters label { position: relative; padding: 7px 12px; border-radius: 5px; cursor: pointer; color: var(--muted); font-size: .8125rem; font-weight: 650; }
+.filters label:has(input:checked) { background: var(--green); color: #162015; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.results { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--surface); }
+.result-grid {
+  display: grid; grid-template-columns: minmax(210px, 2.2fr) minmax(130px, 1.25fr) minmax(86px, .8fr) minmax(95px, .85fr) minmax(106px, .9fr) 32px;
+  gap: 13px; align-items: center; padding: 14px 17px;
+}
+.result-head { color: var(--muted); font-size: .75rem; background: var(--raised); }
+.number-col { text-align: right; font-variant-numeric: tabular-nums; }
+.opportunities { list-style: none; padding: 0; margin: 0; }
+.opportunity { border-top: 1px solid var(--line); }
+.opportunity:hover { background: #1b271f; }
+.selection, .matchup { font-weight: 690; overflow-wrap: anywhere; }
+.secondary { display: block; font-size: .81rem; color: var(--muted); font-weight: 450; margin-top: 3px; overflow-wrap: anywhere; }
+.metric-value { font-weight: 620; }
+.edge { color: var(--green); font-size: 1.16rem; letter-spacing: -.035em; font-weight: 760; }
+.metric-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.details-toggle {
+  width: 32px; height: 32px; display: grid; place-items: center; justify-self: end;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--raised); color: var(--text); font: inherit; cursor: pointer;
+}
+.details-toggle::before { content: "+"; }
+.details-toggle[aria-expanded="true"]::before { content: "−"; }
+.details-toggle:hover { border-color: var(--green); }
+.quote-details { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0 17px 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.quote-details dt { color: var(--muted); font-size: .77rem; }
+.quote-details dd { margin: 3px 0 0; font-size: .9rem; font-variant-numeric: tabular-nums; }
+.empty { padding: 38px 18px; text-align: center; }
+.empty h3 { font-size: 1rem; }
+.empty p, .methodology p { color: var(--muted); font-size: .875rem; margin-top: 6px; }
+.methodology, .warnings { margin-top: 15px; border: 1px solid var(--line); border-radius: 9px; padding: 12px 15px; }
+summary { cursor: pointer; font-weight: 650; font-size: .875rem; }
+.warnings { color: var(--amber); }
+.warnings ul { margin: 8px 0 0; padding-left: 21px; font-size: .83rem; overflow-wrap: anywhere; }
+@media (max-width: 860px) {
+  .shell { width: min(100% - 32px, 650px); }
+  main { padding-top: 30px; }
+  .intro { align-items: start; flex-direction: column; gap: 13px; }
+  .coverage { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 26px; }
+  .stat + .stat { border-left: 0; }
+  .stat:nth-child(even) { border-left: 1px solid var(--line); }
+  .stat:nth-child(n + 3) { border-top: 1px solid var(--line); }
+  .result-head { display: none; }
+  .opportunity:first-child { border-top: 0; }
+  .result-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 32px; gap: 13px 8px; padding: 13px 14px; }
+  .selection { grid-column: 1 / -2; }
+  .game { grid-row: 2; grid-column: 1 / -1; }
+  .details-toggle { grid-column: -2; grid-row: 1; }
+  .number-col { text-align: left; }
+  .metric-label { position: static; display: block; width: auto; height: auto; clip-path: none; font-size: .71rem; color: var(--muted); }
+  .edge { font-size: 1rem; }
+  .quote-details { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-inline: 14px; }
+}
+@media (max-width: 390px) {
+  .nav-links { gap: 12px; font-size: .8rem; }
+  .nav { gap: 10px; }
+}
 </style>
 </head>
 <body>
-<main>
-<nav><a href="/">Parlay Guard</a><a href="/portfolio">Multi-Sport Portfolio</a></nav>
-<h1>Live EV Scanner</h1>
-<p>Polymarket CLOB · NBA full-game moneylines, spreads and totals</p>
-<p id="status" class="status" role="status">Waiting for the first scan…</p>
-<div class="cards">
-<div class="card"><span>Active markets cataloged</span><b id="cataloged">—</b><span id="catalogStatus">Waiting</span></div>
-<div class="card"><span>NBA games checked</span><b id="games">—</b><span id="liveGames"></span></div>
-<div class="card"><span>Markets modeled</span><b id="modeled">—</b></div>
-<div class="card"><span>Sides with usable quotes</span><b id="priced">—</b></div>
-</div>
-<section class="results" aria-labelledby="results">
-<header><h2 id="results">Positive EV estimates</h2><label>Game state <select id="phase"><option value="all">All</option><option value="live">In play</option><option value="pregame">Pregame</option></select></label></header>
-<div class="scroll"><table id="quotes" hidden>
-<thead><tr><th>Game / State</th><th>Market / Side</th><th>Model probability</th><th>Best ask</th><th>Depth-adjusted ask</th><th>Fee / Share</th><th>Net EV</th><th>Screened EV</th><th>Quote age</th></tr></thead>
-<tbody id="rows"></tbody></table></div>
-<p id="empty">Waiting for game data and order books.</p>
-<p id="warnings" hidden></p>
-</section>
-<footer>
-<p>The screen estimates the return on $10 of order-book depth before fees. Screened EV applies fees and subtracts five percentage points from the model probability. In-play estimates use the score, period and clock.</p>
-<p id="calibration">Waiting for calibration details.</p>
-<p>The catalog includes markets outside NBA coverage. In-play coverage includes NBA regular-season full-game moneylines and half-point spreads and totals through regulation, up to the final minute. Delayed feeds, closing markets and changing depth can affect quotes. Research only.</p>
-</footer>
+<header class="topbar">
+  <nav class="nav shell" aria-label="Parlay Guard">
+    <a class="brand" href="/">Parlay Guard</a>
+    <div class="nav-links"><a href="/">Dashboard</a><a href="/portfolio">Multi-Sport Portfolio</a></div>
+  </nav>
+</header>
+<main class="shell">
+  <header class="intro">
+    <div><h1>Live EV Scanner</h1><p class="subtitle">NBA moneylines, spreads, and totals on Polymarket’s international exchange</p></div>
+    <p id="status" class="status" data-state="waiting" role="status">Waiting for first scan</p>
+  </header>
+
+  <dl class="coverage" aria-label="Scan coverage">
+    <div class="stat"><dt>NBA games checked</dt><dd><span id="games">—</span><small id="live-games"></small></dd></div>
+    <div class="stat"><dt>NBA markets modeled</dt><dd id="modeled">—</dd></div>
+    <div class="stat"><dt>Sides with usable quotes</dt><dd id="priced">—</dd></div>
+    <div class="stat"><dt>Active markets cataloged</dt><dd><span id="cataloged">—</span><small id="catalog-status">Waiting</small></dd></div>
+  </dl>
+
+  <section aria-labelledby="results-title">
+    <div class="section-heading">
+      <div><h2 id="results-title">Positive EV opportunities</h2><p class="section-meta" id="result-count">Ranked by screened EV</p></div>
+      <fieldset class="filters" id="filters">
+        <legend class="sr-only">Filter by game state</legend>
+        <label><input class="sr-only" type="radio" name="phase" value="all" checked>All</label>
+        <label><input class="sr-only" type="radio" name="phase" value="live">In play</label>
+        <label><input class="sr-only" type="radio" name="phase" value="pregame">Pregame</label>
+      </fieldset>
+    </div>
+    <div class="results">
+      <div class="result-grid result-head" id="result-head" aria-hidden="true" hidden>
+        <span>Selection</span><span>Game state</span><span class="number-col">Model win %</span><span class="number-col">Avg. ask</span><span class="number-col">Screened EV</span><span></span>
+      </div>
+      <ol class="opportunities" id="opportunities" aria-label="Opportunities ranked by screened EV"></ol>
+      <div class="empty" id="empty"><h3 id="empty-title">Waiting for game data</h3><p id="empty-body">Opportunities appear after the first scan finishes.</p></div>
+    </div>
+  </section>
+
+  <details class="warnings" id="warnings" hidden><summary id="warning-summary">Feed notices</summary><ul id="warning-list"></ul></details>
+  <details class="methodology" id="methodology">
+    <summary>How to read the estimates</summary>
+    <p><strong>Avg. ask</strong> is the estimated average entry price for $10 of orders before fees. Open a row to see the best ask, fee estimate, net EV, and quote age.</p>
+    <p><strong>Screened EV</strong> applies fees and subtracts five percentage points from the model probability. Only positive screened estimates appear.</p>
+    <p id="calibration">Waiting for calibration details.</p>
+    <p>In-play estimates use the score, period, and clock for NBA regular-season games before the final regulation minute. Catalog totals include markets outside NBA coverage. Research only.</p>
+  </details>
 </main>
+
+<template id="opportunity-template">
+  <li class="opportunity">
+    <div class="result-grid">
+      <div class="selection"><span data-field="selection"></span><span class="secondary" data-field="market"></span></div>
+      <div class="game"><span class="matchup" data-field="matchup"></span><span class="secondary" data-field="game-state"></span></div>
+      <div class="number-col"><span class="metric-label">Model win %</span><span class="metric-value" data-field="probability"></span></div>
+      <div class="number-col"><span class="metric-label">Avg. ask</span><span class="metric-value" data-field="ask"></span></div>
+      <div class="number-col"><span class="metric-label">Screened EV</span><span class="edge" data-field="edge"></span></div>
+      <button type="button" class="details-toggle" aria-expanded="false"></button>
+    </div>
+    <dl class="quote-details" hidden>
+      <div><dt>Best ask</dt><dd data-field="best-ask"></dd></div>
+      <div><dt>Fee per share</dt><dd data-field="fee"></dd></div>
+      <div><dt>Net EV</dt><dd data-field="net-ev"></dd></div>
+      <div><dt>Quote age</dt><dd data-field="quote-age"></dd></div>
+    </dl>
+  </li>
+</template>
+
 <script>
-const $ = id => document.getElementById(id);
-const count = new Intl.NumberFormat();
-const pct = value => (100 * value).toFixed(1) + '%';
-const price = value => '$' + value.toFixed(3);
+const byId = id => document.getElementById(id);
+const numbers = new Intl.NumberFormat();
+const money = new Intl.NumberFormat(undefined, {style: 'currency', currency: 'USD', minimumFractionDigits: 3, maximumFractionDigits: 3});
+const time = new Intl.DateTimeFormat(undefined, {hour: 'numeric', minute: '2-digit', second: '2-digit', timeZoneName: 'short'});
+const QUOTE_WINDOW_MS = 35000;
+const list = byId('opportunities');
+const template = byId('opportunity-template');
+const rows = new Map();
 let snapshot = null;
 let loading = false;
+let unavailable = false;
+let rowId = 0;
 
-function cell(row, text, detail) {
-  const td = row.insertCell();
-  td.textContent = text;
-  if (detail) {
-    const small = document.createElement('small');
-    small.textContent = detail;
-    td.append(small);
+function setText(element, text) {
+  if (element.textContent !== text) element.textContent = text;
+}
+
+function count(value) {
+  return Number.isFinite(value) ? numbers.format(value) : '—';
+}
+
+function percent(value, signed = false) {
+  if (!Number.isFinite(value)) return '—';
+  return (signed && value > 0 ? '+' : '') + (value * 100).toFixed(1) + '%';
+}
+
+function price(value) {
+  return Number.isFinite(value) ? money.format(value) : '—';
+}
+
+function isFresh(timestamp, now) {
+  const age = now - Date.parse(timestamp);
+  return age >= -5000 && age <= QUOTE_WINDOW_MS;
+}
+
+function buildRow() {
+  const node = template.content.firstElementChild.cloneNode(true);
+  const fields = Object.fromEntries([...node.querySelectorAll('[data-field]')]
+    .map(element => [element.dataset.field, element]));
+  const button = node.querySelector('button');
+  const details = node.querySelector('dl');
+  details.id = 'quote-details-' + (++rowId);
+  button.setAttribute('aria-controls', details.id);
+  button.addEventListener('click', () => {
+    details.hidden = !details.hidden;
+    button.setAttribute('aria-expanded', String(!details.hidden));
+  });
+  return {node, fields, button};
+}
+
+function updateRow(row, opportunity, now) {
+  const age = Math.max(0, Math.floor((now - Date.parse(opportunity.quote_utc)) / 1000));
+  const gameState = opportunity.score
+    ? opportunity.score.join('–') + ' · Q' + opportunity.period + (opportunity.clock ? ' ' + opportunity.clock : '')
+    : 'Pregame';
+  const label = opportunity.side + ' · ' + opportunity.matchup;
+  const fields = {
+    selection: opportunity.side,
+    market: opportunity.market,
+    matchup: opportunity.matchup,
+    'game-state': gameState,
+    probability: percent(opportunity.probability),
+    ask: price(opportunity.ask),
+    edge: percent(opportunity.screened_ev, true),
+    'best-ask': price(opportunity.best_ask),
+    fee: price(opportunity.fee_per_share),
+    'net-ev': percent(opportunity.ev, true),
+    'quote-age': age + 's',
+  };
+  for (const [key, value] of Object.entries(fields)) setText(row.fields[key], value);
+  row.button.setAttribute('aria-label', 'Quote details for ' + label);
+}
+
+function renderRows(entries, now) {
+  const wanted = new Set();
+  let position = list.firstElementChild;
+  for (const entry of entries) {
+    const key = entry.token_id || [entry.event, entry.market, entry.side].join('|');
+    if (wanted.has(key)) continue;
+    wanted.add(key);
+    let row = rows.get(key);
+    if (!row) {
+      row = buildRow();
+      rows.set(key, row);
+    }
+    updateRow(row, entry, now);
+    if (row.node !== position) list.insertBefore(row.node, position);
+    position = row.node.nextElementSibling;
   }
-  return td;
+  for (const [key, row] of rows) {
+    if (wanted.has(key)) continue;
+    row.node.remove();
+    rows.delete(key);
+  }
+  return wanted.size;
 }
 
 function render() {
-  if (!snapshot) return;
-  const {updated_utc, catalog, coverage, warnings} = snapshot;
-  const age = (Date.now() - Date.parse(updated_utc)) / 1000;
-  const stale = snapshot.stale || !Number.isFinite(age) || age > 35;
-  $('status').textContent = stale ? 'Waiting for a fresh scan.'
-    : 'Last refreshed ' + new Date(updated_utc).toLocaleTimeString();
-  $('cataloged').textContent = count.format(catalog.cataloged);
-  $('catalogStatus').textContent = ({complete:'Catalog pass complete', scanning:'Catalog scan in progress',
-    partial:'Partial catalog', waiting:'Waiting'})[catalog.status] || 'Unknown';
-  $('games').textContent = coverage.games ?? '—';
-  $('liveGames').textContent = coverage.live_games == null ? '' : coverage.live_games + ' in play';
-  $('modeled').textContent = coverage.modeled_markets ?? '—';
-  $('priced').textContent = coverage.priced_sides ?? '—';
-  const validation = snapshot.calibration;
-  $('calibration').textContent = validation
-    ? 'Calibrated on ' + validation.calibration_season + ' NBA play-by-play. Tested on '
-      + count.format(validation.holdout_games) + ' games from ' + validation.holdout_season
-      + '. Spread and total tests use simulated lines. Historical in-play order-book returns remain unverified.'
-    : 'In-play estimates require a loaded NBA calibration.';
-  $('warnings').hidden = !warnings.length;
-  $('warnings').textContent = warnings.join(' · ');
-  const phase = $('phase').value;
-  const entries = stale ? [] : snapshot.opportunities.filter(x =>
-    (phase === 'all' || phase === x.phase) && Date.now() - Date.parse(x.quote_utc) <= 35000);
-  $('quotes').hidden = entries.length === 0;
-  $('empty').hidden = entries.length > 0;
-  $('empty').textContent = stale ? 'Quotes appear when a fresh scan finishes.'
-    : 'No opportunities in this view passed the depth, freshness and EV screen.';
-  $('rows').replaceChildren();
-  for (const x of entries) {
-    const row = $('rows').insertRow();
-    const state = x.score ? x.score.join('–') + ' · Q' + x.period + ' ' + x.clock : 'Pregame';
-    cell(row,x.matchup,state); cell(row,x.side,x.market);
-    cell(row,pct(x.probability)); cell(row,price(x.best_ask)); cell(row,price(x.ask)); cell(row,price(x.fee_per_share));
-    cell(row,pct(x.ev)); cell(row,pct(x.screened_ev)).className = 'positive';
-    cell(row,Math.max(0, Math.floor((Date.now() - Date.parse(x.quote_utc))/1000)) + 's');
+  const now = Date.now();
+  const state = snapshot || {};
+  const catalog = state.catalog || {};
+  const coverage = state.coverage || {};
+  const status = byId('status');
+  const fresh = !unavailable && !state.stale && isFresh(state.updated_utc, now);
+  status.dataset.state = unavailable ? 'error' : fresh ? 'fresh' : state.updated_utc ? 'stale' : 'waiting';
+  setText(status, unavailable ? 'Scanner temporarily unavailable' : fresh ? 'Updated ' + time.format(new Date(state.updated_utc))
+    : state.updated_utc ? 'Waiting for a fresh scan' : 'Waiting for first scan');
+
+  setText(byId('games'), count(coverage.games));
+  setText(byId('live-games'), Number.isFinite(coverage.live_games) ? count(coverage.live_games) + ' in play' : '');
+  setText(byId('modeled'), count(coverage.modeled_markets));
+  setText(byId('priced'), count(coverage.priced_sides));
+  setText(byId('cataloged'), count(catalog.cataloged));
+  setText(byId('catalog-status'), ({complete:'Catalog pass complete', scanning:'Scan in progress', partial:'Partial catalog'})[catalog.status] || 'Waiting');
+
+  const calibration = state.calibration;
+  setText(byId('calibration'), calibration
+    ? 'Calibrated on ' + calibration.calibration_season + ' NBA play-by-play and tested on ' +
+      count(calibration.holdout_games) + ' games from ' + calibration.holdout_season +
+      '. Spread and total tests used simulated lines. Historical in-play returns remain unverified.'
+    : 'In-play estimates require a loaded NBA calibration.');
+
+  const warnings = state.warnings || [];
+  byId('warnings').hidden = warnings.length === 0;
+  setText(byId('warning-summary'), 'Feed notices (' + warnings.length + ')');
+  const warningList = byId('warning-list');
+  const warningContent = JSON.stringify(warnings);
+  if (warningContent !== warningList.dataset.messages) {
+    warningList.dataset.messages = warningContent;
+    warningList.replaceChildren(...warnings.map(message => {
+      const item = document.createElement('li');
+      item.textContent = message;
+      return item;
+    }));
   }
+
+  const phase = byId('filters').querySelector('input:checked').value;
+  const usable = fresh ? (state.opportunities || []).filter(x => isFresh(x.quote_utc, now)) : [];
+  const visible = usable.filter(x => phase === 'all' || x.phase === phase);
+  const shown = renderRows(visible, now);
+  byId('result-head').hidden = shown === 0;
+  byId('empty').hidden = shown > 0;
+  setText(byId('result-count'), shown ? count(shown) + ' shown · ranked by screened EV' : 'Ranked by screened EV');
+
+  const hiddenByFilter = fresh && usable.length > 0 && shown === 0;
+  const title = unavailable ? 'Scanner temporarily unavailable' : !fresh ? 'Waiting for fresh data'
+    : hiddenByFilter ? 'No opportunities in this view' : 'No qualifying opportunities';
+  const description = unavailable ? 'The page keeps checking for data.' : !fresh ? 'Quotes appear after a fresh scan finishes.'
+    : hiddenByFilter ? 'Select All to see the other game states.' : 'No sides passed the price, depth, and EV filters.';
+  setText(byId('empty-title'), title);
+  setText(byId('empty-body'), description);
 }
 
 async function refresh() {
   if (loading) return;
   loading = true;
   try {
-    const response = await fetch('/api/inplay/opportunities', {cache:'no-store', signal: AbortSignal.timeout(8000)});
+    const response = await fetch('/api/inplay/opportunities', {cache: 'no-store', signal: AbortSignal.timeout(8000)});
     if (!response.ok) throw Error(response.status);
     snapshot = await response.json();
+    unavailable = false;
   } catch {
-    if (snapshot) snapshot.stale = true;
-    $('status').textContent = 'The scanner is temporarily unavailable.';
+    unavailable = true;
   } finally {
-    render();
     loading = false;
+    render();
   }
 }
-$('phase').addEventListener('change',render);
+
+byId('filters').addEventListener('change', render);
 refresh();
-setInterval(refresh,5000);
+setInterval(refresh, 5000);
+setInterval(render, 1000);
 </script>
 </body>
 </html>
