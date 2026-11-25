@@ -3,6 +3,7 @@
 import re
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
 from secrets import token_hex
+from urllib.parse import urlencode
 
 import requests
 
@@ -108,6 +109,19 @@ def match_contract(pick, event, start):
     if len(matched) != 1:
         raise WagerError("No unique US contract matches this side and line.")
     return matched[0]
+
+
+def contract_url(event, contract, long):
+    """Use the exchange's market and outcome selection parameters."""
+    league = re.sub(r"-\d{4}$", "", str(event.get("seriesSlug") or ""))
+    event_slug = str(event.get("slug") or "")
+    market_slug = str(contract.get("slug") or "")
+    sides = [side for side in contract.get("marketSides", []) if side.get("long") is long]
+    outcome = str(sides[0].get("id") or "") if len(sides) == 1 else ""
+    if not all(SLUG.fullmatch(value) for value in (league, event_slug, market_slug)) or not outcome.isascii() or not outcome.isdigit():
+        raise WagerError("Polymarket US did not provide an exact link for this selection.")
+    return (f"https://polymarket.us/sports/{league}/{event_slug}?"
+            + urlencode({"marketSlug": market_slug, "outcomeId": outcome}))
 
 
 def quote_order(pick, contract, long, quantity, book, now):
