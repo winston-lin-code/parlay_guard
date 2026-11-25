@@ -81,6 +81,16 @@ details > summary { color: var(--muted); font-size: .84rem; }
 .alt-list li { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding: 8px 0; font-size: .84rem; }
 .alt-list .numbers { flex-shrink: 0; text-align: right; }
 .alt-list .numbers small { display: block; color: var(--muted); }
+.pick-heading { display: flex; justify-content: space-between; gap: 8px; align-items: start; }
+.wager-button { white-space: nowrap; font-size: .8rem; font-weight: 650; }
+#order-dialog { width: min(460px, calc(100% - 28px)); padding: 20px; margin: auto; max-height: 84vh; color: var(--text); }
+#order-dialog::backdrop { background: rgb(0 0 0 / .64); }
+#order-dialog header, .order-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#order-dialog label { display: grid; gap: 4px; font-size: .84rem; margin-top: 10px; }
+#order-dialog .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+#order-dialog p, #order-dialog details { margin-top: 8px; }
+.order-actions { justify-content: end; flex-wrap: wrap; margin-top: 13px; }
+#order-confirm { background: var(--mint); color: #102219; font-weight: 720; }
 .placeholder { padding: 25px 19px; color: var(--muted); font-size: .87rem; }
 .footer-detail { margin-top: 14px; padding: 11px 14px; background: var(--inset); border: 1px solid var(--line); border-radius: 8px; }
 .footer-detail p, .footer-detail ul { color: var(--muted); font-size: .85rem; margin-block: 8px 0; }
@@ -147,7 +157,10 @@ details > summary { color: var(--muted); font-size: .84rem; }
           <div class="section-title"><h3>Top paper pick</h3><p id="pick-age" class="muted"></p></div>
           <p id="no-pick" class="muted"></p>
           <div id="pick" hidden>
-            <p id="selection" class="selection"></p><p id="selection-market" class="selection-market"></p>
+            <div class="pick-heading">
+              <div><p id="selection" class="selection"></p><p id="selection-market" class="selection-market"></p></div>
+              <button type="button" class="control wager-button" id="place-pick">Review wager</button>
+            </div>
             <dl class="metrics">
               <div class="metric"><dt>Model probability</dt><dd id="probability"></dd></div>
               <div class="metric"><dt>Avg. ask for $10</dt><dd id="ask"></dd></div>
@@ -166,9 +179,32 @@ details > summary { color: var(--muted); font-size: .84rem; }
   </div>
   <details class="footer-detail"><summary>How prices and EV are shown</summary>
     <p>Moneyline prices show recent best asks before fees. A price move compares the latest ask with the previous observed ask. EV uses depth for a $10 order, estimated fees, and a five-percentage-point probability stress test. NFL moneyline model probabilities account for the expected half payout on ties.</p>
-    <p>Live EV is available for supported NBA and NFL regular-season markets. NFL live moneylines and totals cover the game phases that passed validation, up to the final two minutes. College, NFL, NHL, and MLB models cover supported pregame markets. Live scores and moneyline prices can continue for games without live EV.</p>
+    <p>Live EV is available for supported NBA, NFL, FBS football, and men’s Division I basketball markets. The college models cover validated regular-season markets and periods through two minutes remaining in regulation. College, NFL, NHL, and MLB models cover supported pregame markets. Live scores and moneyline prices can continue for games without live EV.</p>
   </details>
   <details class="footer-detail" id="feed-notices" hidden><summary>Feed notices</summary><ul id="warnings"></ul></details>
+  <dialog id="order-dialog" class="panel" aria-labelledby="order-title">
+    <form id="order-form">
+      <header><h2 id="order-title">Polymarket US wager</h2><button type="button" class="control" id="order-close">Close</button></header>
+      <p id="order-selection" class="selection"></p>
+      <label>Contracts<input type="number" min="1" max="10000" step="1" required class="control" id="order-quantity"></label>
+      <label id="order-access" hidden>Trading access token<input type="password" autocomplete="off" class="control" id="order-token"></label>
+      <div id="order-preview" hidden>
+        <p id="order-contract" class="muted"></p>
+        <dl class="metrics">
+          <div class="metric"><dt>Max price per contract</dt><dd id="order-price"></dd></div>
+          <div class="metric"><dt>Estimated fee ceiling</dt><dd id="order-fee"></dd></div>
+          <div class="metric"><dt>Estimated maximum cost</dt><dd id="order-cost"></dd></div>
+          <div class="metric"><dt>Screened US EV</dt><dd id="order-ev"></dd></div>
+        </dl>
+        <details><summary>US settlement rules</summary><p id="order-rules" class="muted"></p></details>
+      </div>
+      <p id="order-status" class="muted" role="status"></p>
+      <div class="order-actions">
+        <button type="submit" id="order-fetch" class="control">Get US quote</button>
+        <button type="button" id="order-confirm" class="control" hidden>Confirm real-money order</button>
+      </div>
+    </form>
+  </dialog>
 </main>
 <script>
 const $ = id => document.getElementById(id);
@@ -334,7 +370,7 @@ function renderOdds(game, now) {
 
 function noPickMessage(game) {
   if (game.phase === 'final') return 'Game ended';
-  if (game.phase === 'live' && game.league !== 'NBA' && game.pro !== 'nfl') return 'Live EV unavailable for this league';
+  if (game.phase === 'live' && game.league !== 'NBA' && game.pro !== 'nfl' && !['mbb', 'cfb'].includes(game.college)) return 'Live EV unavailable for this league';
   if (game.priced_sides) return 'No fresh positive EV pick';
   if (!game.college && !game.pro && game.league !== 'NBA') return 'EV model unavailable for this league';
   return 'Waiting for an eligible game state and fresh quotes';
@@ -366,6 +402,8 @@ function renderDetail(game, now) {
   text('no-pick', pick ? '' : noPickMessage(game));
   text('pick-age', pick ? seconds(pick.quote_utc, now) : '');
   if (pick) {
+    $('place-pick').hidden = !pick.market_type;
+    $('place-pick').dataset.wager = pick.token_id;
     text('selection', pick.side);
     text('selection-market', pick.market);
     text('probability', pct(pick.probability) + (pick.half_payout_tie ? ' adjusted' : ''));
@@ -378,14 +416,20 @@ function renderDetail(game, now) {
   const alternatives = pick ? game.entries.filter(row => row.token_id !== pick.token_id) : [];
   $('alternatives').hidden = alternatives.length === 0;
   text('alternative-count', 'Other positive EV markets (' + alternatives.length + ')');
-  const comparison = alternatives.map(row => [row.side, row.market, row.screened_ev, row.ask, row.probability]);
+  const comparison = alternatives.map(row => [row.side, row.market, row.screened_ev, row.ask, row.probability, row.token_id, row.market_type]);
   const key = JSON.stringify(comparison);
   if (key !== alternativesFingerprint) {
     alternativesFingerprint = key;
-    $('alt-list').replaceChildren(...comparison.map(([side, market, value, ask, probability]) => {
+    $('alt-list').replaceChildren(...comparison.map(([side, market, value, ask, probability, token, type]) => {
       const item = element('li', '');
       const numbers = element('div', '', 'numbers');
       numbers.append(element('strong', edge(value), 'edge'), element('small', price(ask) + ' ask · ' + pct(probability) + ' model'));
+      if (type) {
+        const button = element('button', 'Review wager', 'control wager-button');
+        button.type = 'button';
+        button.dataset.wager = token;
+        numbers.append(button);
+      }
       item.append(element('span', [side, market].join(' · ')), numbers);
       return item;
     }));
@@ -439,6 +483,125 @@ async function refresh() {
     render();
   }
 }
+
+const ORDER_API = '/api/inplay/us-wager/';
+let orderSelection = null;
+let orderPreview = null;
+let orderBusy = false;
+let directOrders = null;
+
+function orderActions() {
+  const expired = orderPreview?.expires && Date.now() >= orderPreview.expires * 1000;
+  $('order-confirm').hidden = !orderPreview?.ticket;
+  $('order-confirm').disabled = orderBusy || Boolean(expired);
+  $('order-fetch').disabled = orderBusy || directOrders === null;
+  $('order-close').disabled = orderBusy;
+  $('order-quantity').disabled = orderBusy;
+  $('order-token').disabled = orderBusy;
+}
+
+async function orderRequest(path, payload) {
+  const response = await fetch(ORDER_API + path, {
+    method:'POST', cache:'no-store',
+    headers:{'Content-Type':'application/json', 'X-Order-Token':$('order-token').value},
+    body:JSON.stringify(payload),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'The order request was rejected.');
+  return data;
+}
+
+$('detail').addEventListener('click', async event => {
+  const button = event.target.closest('[data-wager]');
+  if (!button) return;
+  const pick = currentGames(Date.now()).get(chosen)?.entries.find(row => row.token_id === button.dataset.wager);
+  if (!pick) return;
+  orderSelection = {event:pick.event, token_id:pick.token_id};
+  orderPreview = null;
+  directOrders = null;
+  $('order-quantity').value = '';
+  $('order-token').value = '';
+  $('order-access').hidden = true;
+  $('order-preview').hidden = true;
+  text('order-selection', pick.side + ' · ' + pick.market);
+  text('order-status', 'Checking order access…');
+  orderActions();
+  $('order-dialog').showModal();
+  const opened = orderSelection;
+  try {
+    const response = await fetch(ORDER_API + 'status', {cache:'no-store', signal:AbortSignal.timeout(8000)});
+    if (!response.ok) throw new Error();
+    const status = await response.json();
+    if (!$('order-dialog').open || orderSelection !== opened) return;
+    directOrders = status.direct_orders;
+    $('order-access').hidden = !directOrders;
+    text('order-status', directOrders ? 'Review the US quote before placing an order.' : 'US quote only. Direct orders are disabled on this instance.');
+    orderActions();
+  } catch {
+    if (orderSelection === opened) text('order-status', 'Order service unavailable.');
+  }
+});
+
+$('order-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (orderBusy || directOrders === null) return;
+  orderPreview = null;
+  $('order-preview').hidden = true;
+  orderBusy = true;
+  orderActions();
+  text('order-status', 'Checking the US order book…');
+  try {
+    orderPreview = await orderRequest('preview', {...orderSelection, quantity:$('order-quantity').valueAsNumber});
+    text('order-contract', orderPreview.market + ' · ' + orderPreview.quantity + ' contracts');
+    text('order-price', '$' + orderPreview.limit);
+    text('order-fee', '$' + orderPreview.fee_estimate);
+    text('order-cost', '$' + orderPreview.total_estimate);
+    text('order-ev', edge(orderPreview.screened_ev));
+    text('order-rules', orderPreview.rules);
+    $('order-preview').hidden = false;
+    text('order-status', orderPreview.screened_ev <= 0 ? 'Screened EV is no longer positive at the US price.'
+      : orderPreview.ticket ? 'Fill the full quantity at this limit or cancel.' : 'Quote only on this instance.');
+  } catch (error) {
+    text('order-status', error.message);
+  } finally {
+    orderBusy = false;
+    orderActions();
+  }
+});
+
+$('order-confirm').addEventListener('click', async () => {
+  if (orderBusy || !orderPreview?.ticket || Date.now() >= orderPreview.expires * 1000) return;
+  const ticket = orderPreview.ticket;
+  orderPreview = null;
+  orderBusy = true;
+  orderActions();
+  text('order-status', 'Submitting to Polymarket US…');
+  try {
+    const order = await orderRequest('confirm', {ticket});
+    text('order-status', 'Exchange order ' + order.id + ' · ' + order.state.replace(/^ORDER_STATE_/, '').toLowerCase());
+  } catch (error) {
+    text('order-status', error instanceof TypeError
+      ? 'Order status is unknown. Check Polymarket US activity before placing another order.' : error.message);
+  } finally {
+    orderBusy = false;
+    orderActions();
+  }
+});
+
+$('order-quantity').addEventListener('input', () => {
+  orderPreview = null;
+  $('order-preview').hidden = true;
+  orderActions();
+});
+$('order-close').addEventListener('click', () => $('order-dialog').close());
+$('order-dialog').addEventListener('cancel', event => { if (orderBusy) event.preventDefault(); });
+$('order-dialog').addEventListener('close', () => { $('order-token').value = ''; });
+setInterval(() => {
+  if (!$('order-dialog').open || !orderPreview?.ticket || Date.now() < orderPreview.expires * 1000) return;
+  orderPreview = null;
+  orderActions();
+  text('order-status', 'Quote expired. Get a new US quote.');
+}, 500);
 
 $('phases').addEventListener('click', event => {
   const button = event.target.closest('button[data-phase]');

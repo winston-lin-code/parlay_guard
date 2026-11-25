@@ -163,7 +163,8 @@ def scan_college(sports):
             if priced["screened_ev"] > 0:
                 result["opportunities"].append({
                     "event": state["event"], "matchup": state["title"], "phase": "pregame",
-                    "market": market["question"], "side": label, "token_id": token,
+                    "market": market["question"], "market_type": market["sportsMarketType"], "line": market.get("line"),
+                    "side": label, "token_id": token,
                     "probability": probability, **priced,
                     "half_payout_tie": state.get("pro") == "nfl" and market["sportsMarketType"] == "moneyline",
                 })
