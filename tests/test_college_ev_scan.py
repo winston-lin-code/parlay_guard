@@ -45,11 +45,14 @@ def test_nba_refresh_does_not_expire_valid_college_quotes():
     now = datetime.now(timezone.utc)
     state.snapshot["updated_utc"] = (now - timedelta(minutes=3)).isoformat()
     state.college = {
-        "updated_utc": now.isoformat(), "games": [{"event": "cbb-game", "priced_sides": 1, "modeled_markets": 1}],
-        "warnings": [], "opportunities": [{"event": "cbb-game", "quote_utc": now.isoformat(), "screened_ev": 0.08}],
+        "updated_utc": now.isoformat(), "games": [{"event": "cbb-game", "priced_sides": 1, "modeled_markets": 1,
+                                                    "phase": "pregame", "start_utc": (now + timedelta(hours=1)).isoformat()}],
+        "warnings": [], "opportunities": [{"event": "cbb-game", "quote_utc": now.isoformat(), "screened_ev": 0.08,
+                                             "token_id": "123", "phase": "pregame", "probability": 0.55}],
     }
     state.sports["games"] = [{"event": "cbb-game", "college_markets": [{"id": "123"}]}]
     snap = state.read()
     assert not snap["stale"]
+    assert snap["top_picks"] == {"cbb-game": "123"}
     assert snap["opportunities"][0]["event"] == "cbb-game"
     assert "college_markets" not in snap["sports"]["games"][0]
