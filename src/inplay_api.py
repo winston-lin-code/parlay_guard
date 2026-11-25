@@ -14,6 +14,7 @@ from .inplay_scan import MAX_AGE, SCORING_MARKETS, scan_catalog, scan_opportunit
 from .sports_inventory import scan_sports_events
 from .college_ev_scan import scan_college
 from .nfl_inplay_scan import scan_nfl
+from .college_inplay_scan import scan_college_live
 from .game_board_feed import FINAL_SCORE_AGE, MAX_SCORE_AGE, follow_scores, scan_moneylines
 
 router = APIRouter()
@@ -69,13 +70,17 @@ class ScanState:
         self.has_complete_sports_slate = False
         self.moneyline_quotes = {}
         self.scores = {}
-        self.nfl = {"updated_utc": None, "games": [], "opportunities": [], "warnings": []}
+        self.live_sports = {}
         self.college = {"updated_utc": None, "games": [], "opportunities": [], "warnings": []}
 
     def start(self):
         self.stop.clear()
-        for target in (self.live_loop, self.catalog_loop, self.sports_loop, self.college_loop, self.board_loop, self.score_loop, self.nfl_loop):
-            worker = threading.Thread(target=target, daemon=True)
+        tasks = ((self.live_loop,), (self.catalog_loop,), (self.sports_loop,), (self.college_loop,),
+                 (self.board_loop,), (self.score_loop,), (self.league_live_loop, "nfl", scan_nfl),
+                 (self.league_live_loop, "mbb", scan_college_live, "mbb"),
+                 (self.league_live_loop, "cfb", scan_college_live, "cfb"))
+        for target, *args in tasks:
+            worker = threading.Thread(target=target, args=args, daemon=True)
             worker.start()
             self.workers.append(worker)
 
@@ -157,11 +162,12 @@ class ScanState:
     def read(self):
         with self.lock:
             snapshot, catalog, sports = dict(self.snapshot), dict(self.catalog), dict(self.sports)
-            college, nfl = dict(self.college), dict(self.nfl)
+            college, live_sports = dict(self.college), list(self.live_sports.values())
             quotes, scores = dict(self.moneyline_quotes), dict(self.scores)
         now = datetime.now(timezone.utc)
         fresh, games, observations = [], [], []
-        for source in (snapshot, college, nfl):
+        sources = (snapshot, college, *live_sports)
+        for source in sources:
             observed = utc(source.get("updated_utc"))
             if observed is None or not -5 <= (now - observed).total_seconds() <= MAX_AGE:
                 continue
@@ -198,21 +204,21 @@ class ScanState:
                 "updated_utc": max(observations).isoformat() if observations else snapshot.get("updated_utc"),
                 "coverage": coverage, "games": games, "opportunities": ranked, "top_picks": picks,
                 "board": board,
-                "warnings": sorted(set(snapshot.get("warnings", []) + college.get("warnings", []) + nfl.get("warnings", []))),
+                "warnings": sorted({warning for source in sources for warning in source.get("warnings", [])}),
                 "venue": "Polymarket CLOB (international)", "supported_markets": sorted(SCORING_MARKETS)}
 
-    def nfl_loop(self):
+    def league_live_loop(self, league, scanner, *args):
         while not self.stop.is_set():
             started = time.monotonic()
             with self.lock:
                 fixtures = self.sports
             try:
-                snapshot = scan_nfl(fixtures)
+                snapshot = scanner(fixtures, *args)
             except Exception as exc:
                 snapshot = {"updated_utc": None, "games": [], "opportunities": [],
-                            "warnings": [f"NFL live scan unavailable: {type(exc).__name__}"]}
+                            "warnings": [f"{league.upper()} live scan unavailable: {type(exc).__name__}"]}
             with self.lock:
-                self.nfl = snapshot
+                self.live_sports[league] = snapshot
             self.stop.wait(max(4, 15 - (time.monotonic() - started)))
 
     def college_loop(self):

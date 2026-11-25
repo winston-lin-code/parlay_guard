@@ -166,7 +166,7 @@ details > summary { color: var(--muted); font-size: .84rem; }
   </div>
   <details class="footer-detail"><summary>How prices and EV are shown</summary>
     <p>Moneyline prices show recent best asks before fees. A price move compares the latest ask with the previous observed ask. EV uses depth for a $10 order, estimated fees, and a five-percentage-point probability stress test. NFL moneyline model probabilities account for the expected half payout on ties.</p>
-    <p>Live EV is available for supported NBA and NFL regular-season markets. NFL live moneylines and totals cover the game phases that passed validation, up to the final two minutes. College, NFL, NHL, and MLB models cover supported pregame markets. Live scores and moneyline prices can continue for games without live EV.</p>
+    <p>Live EV is available for supported NBA, NFL, FBS football, and men’s Division I basketball markets. The college models cover validated regular-season markets and periods through two minutes remaining in regulation. College, NFL, NHL, and MLB models cover supported pregame markets. Live scores and moneyline prices can continue for games without live EV.</p>
   </details>
   <details class="footer-detail" id="feed-notices" hidden><summary>Feed notices</summary><ul id="warnings"></ul></details>
 </main>
@@ -334,7 +334,7 @@ function renderOdds(game, now) {
 
 function noPickMessage(game) {
   if (game.phase === 'final') return 'Game ended';
-  if (game.phase === 'live' && game.league !== 'NBA' && game.pro !== 'nfl') return 'Live EV unavailable for this league';
+  if (game.phase === 'live' && game.league !== 'NBA' && game.pro !== 'nfl' && !['mbb', 'cfb'].includes(game.college)) return 'Live EV unavailable for this league';
   if (game.priced_sides) return 'No fresh positive EV pick';
   if (!game.college && !game.pro && game.league !== 'NBA') return 'EV model unavailable for this league';
   return 'Waiting for an eligible game state and fresh quotes';
