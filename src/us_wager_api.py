@@ -7,9 +7,11 @@ import secrets
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
+from html import escape
 from pathlib import Path
 
 from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from .inplay_api import scanner
@@ -112,15 +114,37 @@ def status():
     return {"direct_orders": bool(enabled(configuration()))}
 
 
-@router.get("/link")
-def wager_link(selection: PickReference = Query()):
+def exact_wager_url(selection):
     try:
         _, _, event, contract, long = us_contract(selection)
-        return {"url": contract_url(event, contract, long)}
+        return contract_url(event, contract, long)
     except WagerError as exc:
         raise HTTPException(409, str(exc)) from None
     except Exception:
         raise HTTPException(502, "Polymarket US market lookup is temporarily unavailable.") from None
+
+
+@router.get("/link")
+def wager_link(selection: PickReference = Query()):
+    return {"url": exact_wager_url(selection)}
+
+
+@router.get("/open", include_in_schema=False)
+def open_wager(selection: PickReference = Query()):
+    headers = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
+    try:
+        url = exact_wager_url(selection)
+    except HTTPException as exc:
+        return HTMLResponse(
+            "<!doctype html><html lang='en'><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+            "<title>Polymarket US link unavailable</title><main>"
+            "<h1>Polymarket US link unavailable</h1>"
+            f"<p>{escape(str(exc.detail))}</p>"
+            "<p><a href='/inplay'>Back to the scanner</a></p></main></html>",
+            status_code=exc.status_code, headers=headers,
+        )
+    return RedirectResponse(url, status_code=303, headers=headers)
 
 
 @router.post("/preview")

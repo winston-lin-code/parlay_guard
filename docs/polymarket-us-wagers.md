@@ -2,7 +2,7 @@
 
 Open the live scanner, choose **Review wager** beside a positive-EV pick, and enter the number of contracts. The ticket checks the exact game, full-game market, side, and line on Polymarket US. It shows the US price limit, estimated fees and maximum cost, screened US EV, and the US settlement terms. International prices remain on the scanner and are separate from this ticket.
 
-**Open on Polymarket US** opens the matching US game with the exact market and outcome selected. The link uses the verified listing and is available independently of the order-book preview. If the exact US market or side is unavailable, the dialog explains why it cannot open it. Complete the wager on Polymarket US if you choose to proceed.
+**Open on Polymarket US** sits beside each wager and opens the matching US game in a new tab with the exact market and outcome selected. You can also open the link from the review dialog. The link uses the verified listing and is available independently of the order-book preview. If the exact US market or side is unavailable, the dialog explains why it cannot open it. Complete the wager on Polymarket US if you choose to proceed.
 
 On a regular installation the ticket shows a quote. Direct orders require an eligible Polymarket US account and API credentials, plus configuration for a private single-user installation. Configure these environment variables on the server:
 

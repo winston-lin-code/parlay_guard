@@ -176,8 +176,17 @@ def test_deep_link_uses_verified_us_market_and_outcome_without_a_quote(monkeypat
     response = browser.get(route + "link", params=pick)
     assert response.status_code == 200
     assert response.json()["url"] == f"https://polymarket.us/sports/nba/{EVENT}?marketSlug={MARKET}&outcomeId=5795155"
+    redirect = browser.get(route + "open", params=pick, follow_redirects=False)
+    assert redirect.status_code == 303
+    assert redirect.headers["location"] == response.json()["url"]
+    assert redirect.headers["cache-control"] == "no-store"
     assert calls[-1] == "/v1/events/slug/" + EVENT
     row["side"] = "Over"
     assert browser.get(route + "link", params=pick).json()["url"].endswith("outcomeId=5795154")
     contract["marketSides"][0]["id"] = ""
     assert browser.get(route + "link", params=pick).status_code == 409
+
+    unavailable = browser.get(route + "open", params=pick, follow_redirects=False)
+    assert unavailable.status_code == 409
+    assert "Back to the scanner" in unavailable.text
+    assert "location" not in unavailable.headers
