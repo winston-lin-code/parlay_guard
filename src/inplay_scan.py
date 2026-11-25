@@ -387,7 +387,8 @@ def scan_opportunities():
                 "phase": "live" if game["phase"] == "in" else "pregame",
                 "period": game["period"], "clock": game["clock"],
                 "score": [game["away_score"], game["home_score"]] if game["phase"] == "in" else None,
-                "market": market["question"], "side": label, "token_id": token,
+                "market": market["question"], "market_type": market["sportsMarketType"], "line": market.get("line"),
+                "side": label, "token_id": token,
                 "probability": probability, **priced,
             })
     calibration_summary = {key: calibration[key] for key in (

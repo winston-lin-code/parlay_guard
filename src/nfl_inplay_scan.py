@@ -128,7 +128,8 @@ def scan_live(sports, sport, artifact, get_scoreboard, parse_clock, market_candi
                     if priced["screened_ev"] > 0:
                         result["opportunities"].append({
                             "event": view["event"], "matchup": view["title"], "phase": "live",
-                            "score": [away, home], "market": market["question"], "side": label, "token_id": token,
+                            "score": [away, home], "market": market["question"], "market_type": market["sportsMarketType"], "line": market.get("line"),
+                            "side": label, "token_id": token,
                             "probability": probability, "half_payout_tie": sport == "nfl" and market["sportsMarketType"] == "moneyline", **priced,
                         })
             result["games"].append(view)

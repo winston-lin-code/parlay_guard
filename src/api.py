@@ -20,6 +20,7 @@ ARCHIVE_STRATEGY=ROOT/'models/parlay_comparison.html'
 from .live_dashboard_api import router as live_dashboard_router
 from .deploy_artifacts import restore_forecast_inputs
 from .inplay_api import router as inplay_router, scanner as inplay_scanner
+from .us_wager_api import router as us_wager_router
 
 class LiveState:
     def __init__(self):
@@ -136,6 +137,7 @@ async def lifespan(app:FastAPI):
 app=FastAPI(title='Parlay Guard Auto Live',version='0.4',lifespan=lifespan)
 app.include_router(live_dashboard_router)
 app.include_router(inplay_router)
+app.include_router(us_wager_router)
 
 
 # PARLAY_GUARD_COLLEGE_GUARD_V1
