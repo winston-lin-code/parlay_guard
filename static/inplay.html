@@ -78,10 +78,13 @@ h1 { font-size: clamp(2.25rem, 5vw, 3.6rem); letter-spacing: -.065em; line-heigh
 details > summary { color: var(--muted); font-size: .84rem; }
 .alternatives { margin-top: 12px; }
 .alt-list { padding: 0; margin: 10px 0 0; list-style: none; }
-.alt-list li { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding: 8px 0; font-size: .84rem; }
-.alt-list .numbers { flex-shrink: 0; text-align: right; }
+.alt-list li { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; border-top: 1px solid var(--line); padding: 8px 0; font-size: .84rem; }
+.alt-list .numbers { flex-shrink: 0; text-align: right; margin-left: auto; }
+.alt-list .wager-actions { flex-basis: 100%; justify-content: end; }
 .alt-list .numbers small { display: block; color: var(--muted); }
-.pick-heading { display: flex; justify-content: space-between; gap: 8px; align-items: start; }
+.pick-heading { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; align-items: start; }
+.wager-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.wager-actions a { display: inline-block; text-decoration: none; }
 .wager-button { white-space: nowrap; font-size: .8rem; font-weight: 650; }
 #order-dialog { width: min(460px, calc(100% - 28px)); padding: 20px; margin: auto; max-height: 84vh; color: var(--text); }
 #order-dialog::backdrop { background: rgb(0 0 0 / .64); }
@@ -160,7 +163,10 @@ details > summary { color: var(--muted); font-size: .84rem; }
           <div id="pick" hidden>
             <div class="pick-heading">
               <div><p id="selection" class="selection"></p><p id="selection-market" class="selection-market"></p></div>
-              <button type="button" class="control wager-button" id="place-pick">Review wager</button>
+              <div class="wager-actions" id="pick-actions">
+                <button type="button" class="control wager-button" id="place-pick">Review wager</button>
+                <a class="control wager-button" id="open-pick" target="_blank" rel="noopener noreferrer">Open on Polymarket US</a>
+              </div>
             </div>
             <dl class="metrics">
               <div class="metric"><dt>Model probability</dt><dd id="probability"></dd></div>
@@ -379,6 +385,11 @@ function noPickMessage(game) {
   return 'Waiting for an eligible game state and fresh quotes';
 }
 
+function setWagerLink(link, event, token, side, market) {
+  link.href = '/api/inplay/us-wager/open?' + new URLSearchParams({event, token_id:token});
+  link.setAttribute('aria-label', 'Open on Polymarket US: ' + side + ' · ' + market);
+}
+
 function renderDetail(game, now) {
   $('selected').hidden = !game;
   $('no-selection').hidden = Boolean(game);
@@ -405,8 +416,9 @@ function renderDetail(game, now) {
   text('no-pick', pick ? '' : noPickMessage(game));
   text('pick-age', pick ? seconds(pick.quote_utc, now) : '');
   if (pick) {
-    $('place-pick').hidden = !pick.market_type;
+    $('pick-actions').hidden = !pick.market_type;
     $('place-pick').dataset.wager = pick.token_id;
+    if (pick.market_type) setWagerLink($('open-pick'), pick.event, pick.token_id, pick.side, pick.market);
     text('selection', pick.side);
     text('selection-market', pick.market);
     text('probability', pct(pick.probability) + (pick.half_payout_tie ? ' adjusted' : ''));
@@ -420,20 +432,26 @@ function renderDetail(game, now) {
   $('alternatives').hidden = alternatives.length === 0;
   text('alternative-count', 'Other positive EV markets (' + alternatives.length + ')');
   const comparison = alternatives.map(row => [row.side, row.market, row.screened_ev, row.ask, row.probability, row.token_id, row.market_type]);
-  const key = JSON.stringify(comparison);
+  const key = JSON.stringify([game.event, comparison]);
   if (key !== alternativesFingerprint) {
     alternativesFingerprint = key;
     $('alt-list').replaceChildren(...comparison.map(([side, market, value, ask, probability, token, type]) => {
       const item = element('li', '');
       const numbers = element('div', '', 'numbers');
       numbers.append(element('strong', edge(value), 'edge'), element('small', price(ask) + ' ask · ' + pct(probability) + ' model'));
+      item.append(element('span', [side, market].join(' · ')), numbers);
       if (type) {
         const button = element('button', 'Review wager', 'control wager-button');
         button.type = 'button';
         button.dataset.wager = token;
-        numbers.append(button);
+        const link = element('a', 'Open on Polymarket US', 'control wager-button');
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        setWagerLink(link, game.event, token, side, market);
+        const actions = element('div', '', 'wager-actions');
+        actions.append(button, link);
+        item.append(actions);
       }
-      item.append(element('span', [side, market].join(' · ')), numbers);
       return item;
     }));
   }
