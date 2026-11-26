@@ -52,7 +52,7 @@ def utc(value):
     try:
         t=pd.to_datetime(value,utc=True,errors='coerce')
         if pd.isna(t):return None
-        return t.to_pydatetime()
+        return t.to_pydatetime(warn=False)
     except (ValueError,TypeError):return None
 
 

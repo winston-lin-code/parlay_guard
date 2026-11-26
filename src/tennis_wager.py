@@ -1,6 +1,7 @@
 """Local live runner for ITF singles match-winner orders on Polymarket US."""
 
 import argparse
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, nullcontext
 from datetime import datetime, timezone
@@ -18,7 +19,7 @@ from .game_board_feed import follow_scores
 from .halftime_paper import MIN_PROBABILITY, MIN_SCREENED_EV, PAPER_STAKE
 from .inplay_scan import utc
 from .tennis_live import (
-    ITF_LEAGUES, first_set_checkpoint, load_elo_break_models, observe_first_set_break, tennis_projection,
+    BREAK_OBSERVATION_MAX_GAP, ITF_LEAGUES, first_set_checkpoint, load_elo_break_models, observe_first_set_break, tennis_projection,
 )
 from .us_wager import BOOK_MAX_AGE, CENT, SLUG, WagerError, decimal, name, public, quote_order, team_names
 
@@ -74,6 +75,29 @@ def live_catalog():
     raise WagerError("Live event catalog exceeds its request limit.")
 
 
+def catalog_scores(events, previous):
+    """Build paper-only scores using the catalog's title order and update timestamp."""
+    scores = {}
+    for slug, event in events.items():
+        title = str(event.get("title") or "")
+        columns = title.split(" vs. ")
+        teams = event.get("teams") or []
+        timestamp = event.get("updatedAt")
+        if (len(columns) != 2 or len(teams) != 2 or event.get("live") is not True
+                or event.get("ended") is True or not event.get("score") or not event.get("period")
+                or any(" / " in side or " - " in side for side in columns)
+                or any(name(column) not in team_names({"team": team}) for column, team in zip(columns, teams))
+                or not fresh(timestamp, SCORE_MAX_AGE)):
+            continue
+        score = {"event_slug": slug, "score_league": slug.split("-", 1)[0].upper(),
+                 "score_columns": columns, "phase": "live", "score_utc": timestamp,
+                 "score_text": event["score"], "period_text": event["period"], "source": "catalog"}
+        score["first_set_break_utc"] = observe_first_set_break(
+            previous.get(slug, {}), score, utc, allow_missed_opening=True)
+        scores[slug] = score
+    return scores
+
+
 def catalog_event(events, score):
     slug = score.get("event_slug")
     if slug:
@@ -94,7 +118,19 @@ def catalog_event(events, score):
     return matches[0] if len(matches) == 1 else None
 
 
-def match_selection(event, score):
+def screening_checkpoint(score, at, *, early_set_two=False):
+    checkpoint = first_set_checkpoint(score, at)
+    if checkpoint or not early_set_two or score.get("first_set_break_utc"):
+        return checkpoint
+    score_text = score.get("score_text", "").split(",")
+    if score.get("period_text", "").strip().upper() == "S2" and len(score_text) == 2:
+        games = score_text[1].partition(":")[0].strip()
+        if games in ("0-0", "1-0", "0-1"):
+            return "Early set two (score-based)"
+    return None
+
+
+def match_selection(event, score, report=lambda reason: None, *, early_set_two=False):
     slug = event.get("slug") or ""
     first, separator, second = str(event.get("title") or "").partition(" vs. ")
     if (not separator or not SLUG.fullmatch(slug) or (score.get("event_slug") and slug != score["event_slug"])
@@ -102,51 +138,74 @@ def match_selection(event, score):
             or event.get("live") is not True or event.get("ended") is True
             or event.get("active") is not True or event.get("closed") is not False
             or not fresh(score.get("score_utc"), SCORE_MAX_AGE)):
+        report("listing closed, score stale, or match unsupported")
         return None
     contracts = [market for market in event.get("markets", [])
                  if market.get("slug") == f"aec-{slug}" and market.get("marketType") == "moneyline"
                  and market.get("sportsMarketType") == "tennis_match_winner"
                  and market.get("active") is True and market.get("closed") is False]
     if len(contracts) != 1:
+        report("no unique match-winner market")
         return None
     contract = contracts[0]
     sides = contract.get("marketSides") or []
     if len(sides) != 2 or {side.get("long") for side in sides} != {True, False}:
+        report("invalid market sides")
         return None
     ordered = []
     for column in score["score_columns"]:
         matches = [side for side in sides if name(column) in team_names(side)]
         if len(matches) != 1:
+            report("score player could not be matched")
             return None
         ordered.append(matches[0])
     if len(ordered) != 2 or ordered[0] is ordered[1]:
+        report("score order ambiguous")
         return None
     names = []
     for side in ordered:
         labels = [label for label in (first, second) if name(label) in team_names(side)]
         if len(labels) != 1:
+            report("market player could not be matched")
             return None
         names.append(labels[0])
     if len(set(names)) != 2:
+        report("market player identity ambiguous")
         return None
     projection = tennis_projection({"event": slug, "title": event["title"]},
                                    {**score, "score_order": " / ".join(names)}, now())
-    if not projection or not projection["checkpoint"] or not projection["elo_prior"]:
+    if not projection:
+        report("unsupported score format")
+        return None
+    checkpoint = screening_checkpoint(score, now(), early_set_two=early_set_two)
+    if not checkpoint:
+        if score["period_text"].strip().upper() in ("S2", "TB2") and not score.get("first_set_break_utc"):
+            report("set-two transition not observed")
+        else:
+            report("outside first-set-break window")
+        return None
+    if not projection["elo_prior"]:
+        report("one or both Elo ratings unavailable")
         return None
     first_probability = projection["first_probability"]
     selected = int(first_probability < .5)
     probability = (first_probability, 1 - first_probability)[selected]
-    if probability < MIN_PROBABILITY or ordered[selected].get("tradable") is not True:
+    if probability < MIN_PROBABILITY:
+        report("model probability below 60%")
+        return None
+    if ordered[selected].get("tradable") is not True:
+        report("selected side paused")
         return None
     return contract, ordered[selected]["long"], {"side": names[selected], "probability": probability,
-                                                   "checkpoint": projection["checkpoint"]}
+                                                   "checkpoint": checkpoint}
 
 
-def order_for_stake(pick, contract, long, book, stake):
+def order_for_stake(pick, contract, long, book, stake, report=lambda reason: None):
     # Find the largest whole-contract quantity that fits the worst-case limit and fee.
     minimum = max(1, int(decimal(contract["minimumTradeQty"]).to_integral_value(rounding=ROUND_CEILING)))
     low, high = minimum, min(int(stake / CENT), 10_000)
     best = None
+    quote_available = False
     while low <= high:
         quantity = (low + high) // 2
         try:
@@ -154,11 +213,16 @@ def order_for_stake(pick, contract, long, book, stake):
         except WagerError:
             high = quantity - 1
             continue
+        quote_available = True
         if decimal(summary["total_estimate"]) <= stake:
             best = payload, summary
             low = quantity + 1
         else:
             high = quantity - 1
+    if best is None:
+        report("minimum order exceeds stake" if quote_available or minimum > int(stake / CENT)
+               else "no fresh executable quote or insufficient depth")
+        return None
     while best:
         payload, summary = best
         if summary["screened_ev"] >= MIN_SCREENED_EV:
@@ -168,6 +232,7 @@ def order_for_stake(pick, contract, long, book, stake):
         if quantity < minimum:
             break
         best = quote_order(pick, contract, long, quantity, book, now())
+    report("screened EV below +5%")
     return None
 
 
@@ -216,35 +281,61 @@ def submit(exchange, store, slug, payload):
     return {"order_id": order_id, "state": status}
 
 
-def price_candidate(candidate, stake):
+def resolve_catalog_score(slug, listed, detail):
+    """Prefer the newest usable score while keeping event details for market checks."""
+    listed_at = utc(listed["score_utc"])
+    detail_at = utc(detail.get("updatedAt"))
+    if listed_at is None or detail_at is None or detail.get("slug") != slug:
+        return None, "catalog score timestamp or event identity missing"
+    same_score = all(detail.get(key) == listed[field]
+                     for key, field in (("score", "score_text"), ("period", "period_text")))
+    if detail_at < listed_at or (detail_at == listed_at and same_score):
+        return listed, None
+    if detail_at == listed_at:
+        return None, "catalog score sources disagree at the same timestamp"
+    refreshed = catalog_scores({slug: detail}, {slug: listed}).get(slug)
+    if not refreshed or refreshed["score_columns"] != listed["score_columns"]:
+        return None, "newer catalog score stale or unverifiable"
+    return refreshed, None
+
+
+def price_candidate(candidate, stake, *, early_set_two=False):
     game_id, state, event = candidate
     slug = event["slug"]
+    reasons = []
     try:
         event = public("/v1/events/slug/" + slug)["event"]
-        selection = match_selection(event, state)
+        if state.get("source") == "catalog":
+            state, reason = resolve_catalog_score(slug, state, event)
+            if reason:
+                return None, reason
+        selection = match_selection(event, state, reasons.append, early_set_two=early_set_two)
         if selection is None:
-            return None
+            return None, reasons[-1]
         contract, long, pick = selection
         book = public("/v1/markets/" + contract["slug"] + "/book", fresh_book=True)["marketData"]
-        ticket = order_for_stake(pick, contract, long, book, stake)
+        ticket = order_for_stake(pick, contract, long, book, stake, reasons.append)
         if ticket:
             payload, summary = ticket
-            return game_id, slug, state, payload, {**summary, **pick, "score": state["score_text"]}
+            return (game_id, slug, state, payload, {**summary, **pick, "score": state["score_text"],
+                                                   "score_source": state.get("source", "websocket")}), None
     except DATA_ERRORS as exc:
-        print(f"Skipped {slug}: {type(exc).__name__}", flush=True)
-    return None
+        return None, f"pricing error ({type(exc).__name__})"
+    return None, reasons[-1]
 
 
 def run(args, exchange):
     scores, stop = Scores(), Event()
     mode = "live" if exchange else "paper"
+    early_set_two = args.paper_early_set_two and exchange is None
     with closing(ledger(args.db)) as store, ThreadPoolExecutor(max_workers=4) as pool:
         if exchange and store.execute("SELECT 1 FROM tennis_orders WHERE mode='live' AND state='pending'").fetchone():
             raise RuntimeError("The ledger has an unresolved live order. Reconcile it with Polymarket US before trading.")
         worker = Thread(target=follow_scores, args=(stop, scores.publish), daemon=True)
         worker.start()
         heartbeat = refresh_catalog = 0
-        events = {}
+        events, paper_scores, paper_history = {}, {}, {}
+        skipped = Counter()
         try:
             while not stop.is_set():
                 if monotonic() >= refresh_catalog:
@@ -253,29 +344,54 @@ def run(args, exchange):
                     except DATA_ERRORS as exc:
                         events = {}
                         print(f"ITF market catalog unavailable: {type(exc).__name__}", flush=True)
-                    refresh_catalog = monotonic() + 15
+                    if not exchange:
+                        paper_scores = catalog_scores(events, paper_history)
+                        paper_history = {
+                            slug: score for slug, score in {**paper_history, **paper_scores}.items()
+                            if fresh(score["score_utc"], BREAK_OBSERVATION_MAX_GAP.total_seconds())
+                        }
+                    refresh_catalog = monotonic() + (15 if exchange else args.interval)
                 active = scores.active_games()
-                candidates = [(game_id, state, event) for game_id, state in active
-                              if (event := catalog_event(events, state)) is not None
-                              and not store.execute("SELECT 1 FROM tennis_orders WHERE mode=? AND event=?",
-                                                    (mode, event["slug"])).fetchone()]
+                matched = [(game_id, state, event) for game_id, state in active
+                           if (event := catalog_event(events, state)) is not None]
+                socket_events = {event["slug"] for _, _, event in matched}
+                matched.extend((slug, state, events[slug]) for slug, state in paper_scores.items()
+                               if slug not in socket_events and fresh(state["score_utc"], SCORE_MAX_AGE))
+                candidates = [(game_id, state, event) for game_id, state, event in matched
+                              if not store.execute("SELECT 1 FROM tennis_orders WHERE mode=? AND event=?",
+                                                   (mode, event["slug"])).fetchone()]
                 if monotonic() >= heartbeat:
-                    print(f"{mode.upper()} · {len(events)} ITF listings · {len(active)} fresh score streams "
-                          f"· {len(candidates)} matched and eligible for pricing", flush=True)
+                    print(f"{mode.upper()} · {len(events)} ITF listings · {len(active)} fresh WebSocket scores "
+                          f"· {len(paper_scores)} fresh paper catalog scores · {len(candidates)} queued for screening",
+                          flush=True)
+                    if skipped:
+                        counts = " · ".join(f"{reason}: {count}" for reason, count in skipped.most_common())
+                        print(f"Skipped since last update · {counts}", flush=True)
+                        skipped.clear()
                     heartbeat = monotonic() + 30
-                results = pool.map(lambda candidate: price_candidate(candidate, args.stake), candidates)
-                for result in results:
-                    if not result:
+                results = pool.map(
+                    lambda candidate: price_candidate(candidate, args.stake, early_set_two=early_set_two), candidates)
+                for result, reason in results:
+                    if reason:
+                        skipped[reason] += 1
                         continue
                     game_id, slug, state, payload, summary = result
-                    newest = scores.get(game_id)
+                    if state.get("source") == "catalog":
+                        if exchange:
+                            continue
+                        # Catalog polling runs on this thread. Pricing may have refreshed the score.
+                        newest = state
+                    else:
+                        newest = scores.get(game_id)
                     if (not fresh(state["score_utc"], SCORE_MAX_AGE)
                             or not fresh(summary["quote_utc"], BOOK_MAX_AGE)
-                            or first_set_checkpoint(newest, now()) != summary["checkpoint"]
+                            or screening_checkpoint(newest, now(), early_set_two=early_set_two) != summary["checkpoint"]
                             or any(newest.get(key) != state.get(key)
                                    for key in ("phase", "score_text", "period_text", "score_columns"))):
+                        skipped["score, quote, or checkpoint changed before entry"] += 1
                         continue
                     if not reserve(store, mode, slug, summary, args.daily_cap):
+                        skipped["already recorded, pending order, or daily cap"] += 1
                         continue
                     print(json.dumps({"mode": mode, "event": slug, **summary,
                                       **(submit(exchange, store, slug, payload) if exchange else {})}), flush=True)
@@ -297,7 +413,10 @@ def money(value):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--live", action="store_true", help="Submit real orders. Default is paper logging.")
+    timing = parser.add_mutually_exclusive_group()
+    timing.add_argument("--paper-early-set-two", action="store_true",
+                        help="Also screen early set two in paper mode when the break time is unknown")
+    timing.add_argument("--live", action="store_true", help="Submit real orders. Default is paper logging.")
     parser.add_argument("--stake", type=money, default=PAPER_STAKE, help="Maximum all-in cost per order in USD")
     parser.add_argument("--daily-cap", type=money, help="Maximum reserved exposure per UTC day in USD")
     parser.add_argument("--interval", type=int, default=5, help="Seconds between scans")

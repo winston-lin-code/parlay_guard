@@ -50,3 +50,78 @@ def test_ledger_blocks_duplicates_and_unresolved_orders(tmp_path):
         wager.submit(unavailable, store, "itfme-two", {})
     assert not wager.reserve(store, "live", "itfme-three", summary, Decimal("10"))
     store.close()
+
+
+def test_paper_catalog_scores_check_title_order_and_track_set_break():
+    from datetime import timedelta
+
+    slug = "itfwo-player1-player2"
+    start = wager.now() - timedelta(seconds=10)
+    teams = [{"name": "Player One"}, {"name": "Player Two"}]
+    first = {"slug": slug, "title": "Player One vs. Player Two", "teams": teams, "live": True,
+             "score": "5-4:40-0", "period": "S1", "updatedAt": start.isoformat()}
+    baseline = wager.catalog_scores({slug: first}, {})
+    second = {**first, "score": "6-4, 0-0:0-0", "period": "S2", "updatedAt": wager.now().isoformat()}
+    result = wager.catalog_scores({slug: second}, baseline)[slug]
+    assert result["source"] == "catalog"
+    assert result["first_set_break_utc"] == second["updatedAt"]
+    assert not wager.catalog_scores({slug: {**first, "teams": teams[::-1]}}, {})
+    assert not wager.catalog_scores({slug: {**first, "updatedAt": (start - timedelta(minutes=1)).isoformat()}}, {})
+
+
+def test_pricing_uses_newer_catalog_score_and_preserves_transition(monkeypatch):
+    from datetime import timedelta
+
+    slug = "itfme-strombachs-yadav"
+    now = wager.now()
+    teams = [{"name": "Robert Strombachs"}, {"name": "Yash Yadav"}]
+    first = {"slug": slug, "title": "Robert Strombachs vs. Yash Yadav", "teams": teams, "live": True,
+             "score": "5-4:40-0", "period": "S1", "updatedAt": (now - timedelta(seconds=5)).isoformat()}
+    listed = wager.catalog_scores({slug: first}, {})[slug]
+    second = {**first, "score": "6-4, 0-0:0-0", "period": "S2", "updatedAt": now.isoformat()}
+    newest, reason = wager.resolve_catalog_score(slug, listed, second)
+    assert reason is None
+    assert newest["first_set_break_utc"] == second["updatedAt"]
+    assert wager.resolve_catalog_score(slug, newest, first) == (newest, None)
+    assert wager.resolve_catalog_score(slug, listed, {**second, "updatedAt": first["updatedAt"]})[0] is None
+
+    monkeypatch.setattr(wager, "public", lambda path: {"event": second})
+
+    def capture(event, state, report, *, early_set_two=False):
+        assert state == newest
+        report("observed newer score")
+
+    monkeypatch.setattr(wager, "match_selection", capture)
+    assert wager.price_candidate((slug, listed, first), Decimal("2")) == (None, "observed newer score")
+
+
+def test_catalog_recognizes_missed_opening_only_with_recent_set_one_score():
+    from datetime import timedelta
+
+    slug = "itfwo-player1-player2"
+    now = wager.now()
+    first = {"slug": slug, "title": "Player One vs. Player Two",
+             "teams": [{"name": "Player One"}, {"name": "Player Two"}], "live": True,
+             "score": "5-4:40-0", "period": "S1", "updatedAt": (now - timedelta(seconds=10)).isoformat()}
+    previous = wager.catalog_scores({slug: first}, {})
+    second = {**first, "score": "6-4, 1-0:15-0", "period": "S2", "updatedAt": now.isoformat()}
+    assert wager.catalog_scores({slug: second}, previous)[slug]["first_set_break_utc"] == first["updatedAt"]
+    assert wager.catalog_scores({slug: second}, {})[slug]["first_set_break_utc"] is None
+    late = {**second, "score": "6-4, 2-0:0-0"}
+    assert wager.catalog_scores({slug: late}, previous)[slug]["first_set_break_utc"] is None
+    old = {slug: {**previous[slug], "score_utc": (now - timedelta(seconds=61)).isoformat()}}
+    assert wager.catalog_scores({slug: second}, old)[slug]["first_set_break_utc"] is None
+
+
+def test_optional_early_set_two_screening_uses_score_only_for_unknown_break():
+    from datetime import timedelta
+
+    now = wager.now()
+    early = {"period_text": "S2", "score_text": "6-4, 1-0:15-0"}
+    assert wager.screening_checkpoint(early, now) is None
+    assert wager.screening_checkpoint(early, now, early_set_two=True) == "Early set two (score-based)"
+    later = {**early, "score_text": "6-4, 1-1:0-0"}
+    assert wager.screening_checkpoint(later, now, early_set_two=True) is None
+    measured = {**early, "first_set_break_utc": (now - timedelta(minutes=2)).isoformat()}
+    assert wager.screening_checkpoint(measured, now, early_set_two=True) == "Within 5 min of observed set break"
+    assert wager.screening_checkpoint(measured, now + timedelta(minutes=4), early_set_two=True) is None
