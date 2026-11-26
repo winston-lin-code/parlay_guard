@@ -29,17 +29,21 @@ def league_json(url, **params):
     return read_json("GET", url, max_age=20, params=params, headers={"Cache-Control": "no-cache"})
 
 
-def market_events(league):
-    events = {}
+def league_listings(league):
     for offset in range(0, 1000, 50):
         page = public(f"/v2/leagues/{league}/events?limit=50&offset={offset}", fresh_score=True)["events"]
         for event in page:
             slug = event.get("slug") or ""
-            if SLUG.fullmatch(slug) and slug.startswith(league + "-") and event.get("live") is True:
-                events[slug] = event, now()
+            if SLUG.fullmatch(slug) and slug.startswith(league + "-"):
+                yield slug, event, now()
         if len(page) < 50:
-            return events
+            return
     raise ValueError(f"{league.upper()} market catalog exceeded its page limit")
+
+
+def market_events(league):
+    return {slug: (event, received) for slug, event, received in league_listings(league)
+            if event.get("live") is True}
 
 
 def official_fixtures(league, day):

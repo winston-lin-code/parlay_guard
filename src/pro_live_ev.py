@@ -9,14 +9,16 @@ from time import monotonic, sleep
 
 from . import pro_inplay_model as model
 from .pro_live_scores import (
-    DATA_ERRORS, LEAGUES, MLB, NHL, SPORTS, agreement, assess, league_json, market_events, market_state, mlb_state,
+    DATA_ERRORS, LEAGUES, MLB, NHL, SPORTS, agreement, assess, league_json, league_listings, market_state, mlb_state,
     nhl_state, now, received_state,
 )
 from .inplay_scan import utc
+from .predict_today import ET
 from .us_wager import CENT, WagerError, decimal, public, quote_order
 
 MAX_BOOK_AGE = 5
 MIN_SCREENED_ROI = .05
+IDLE_HEARTBEAT_SECONDS = 60
 OUTCOME_SCOPE = {
     "mlb": r"extra innings (?:are )?included",
     "nhl": r"overtime and (?:any )?shootout (?:are )?included",
@@ -149,7 +151,10 @@ def scan(league, stake, slippage):
     if not artifact:
         return {"league": league, "status": "model_unavailable"}
     try:
-        events = market_events(league)
+        listings = list(league_listings(league))
+        events = {slug: (event, received) for slug, event, received in listings if event.get("live") is True}
+        if not events:
+            return idle_status(league, listings)
         observed = assess(league, events)
     except DATA_ERRORS as exc:
         return {"league": league, "status": "feed_unavailable", "error": str(exc)}
@@ -162,6 +167,27 @@ def scan(league, stake, slippage):
             results.append({**verified, "paper": True, "pricing_status": "quote_or_recheck_unavailable",
                             "error": str(exc)})
     return {"league": league, "listings_checked": len(events), "games": results}
+
+
+def idle_status(league, listings):
+    scheduled = []
+    for slug, event, received in listings:
+        if event.get("ended") is True or event.get("closed") is True or event.get("active") is not True:
+            continue
+        start = utc(event.get("startTime"))
+        if start and start >= received:
+            scheduled.append((start, slug, event.get("title")))
+    earliest = min((start for start, _, _ in scheduled), default=None)
+    return {"league": league, "status": "no_live_listings", "listings_checked": 0,
+            "upcoming_listings": len(scheduled), "next_start_et": earliest.astimezone(ET).isoformat() if earliest else None,
+            "next_games": [{"event": slug, "title": title} for start, slug, title in sorted(scheduled, key=lambda r: r[1])
+                           if start == earliest], "games": []}
+
+
+def should_report(result, previous, elapsed):
+    return result.get("status") != "no_live_listings" or (
+        result != previous or elapsed >= IDLE_HEARTBEAT_SECONDS
+    )
 
 
 def main():
@@ -179,12 +205,17 @@ def main():
     except ValueError as exc:
         parser.error(str(exc))
     leagues = list(dict.fromkeys(args.leagues))
+    last_output = {}
     try:
         with ThreadPoolExecutor(max_workers=len(leagues)) as pool:
             while True:
                 started = monotonic()
                 for result in pool.map(lambda league: scan(league, stake, slippage), leagues):
-                    print(json.dumps(result), flush=True)
+                    league = result["league"]
+                    previous, emitted = last_output.get(league, (None, started))
+                    if should_report(result, previous, started - emitted):
+                        print(json.dumps(result), flush=True)
+                        last_output[league] = result, started
                 if not args.watch:
                     break
                 sleep(max(0, args.interval - (monotonic() - started)))

@@ -68,3 +68,21 @@ def test_live_pricing_reuses_executable_depth_and_holds_on_state_change(monkeypa
     assert ev.evaluate("nhl", event, verified, artifact, Decimal(2), Decimal(".01"))[
         "pricing_status"
     ] == "game_state_changed_during_quote"
+
+
+def test_idle_scan_reports_next_market_in_eastern_time(monkeypatch):
+    upcoming = {"title": "Jets vs. Bruins", "active": True, "startTime": "2026-07-01T22:00:00Z"}
+    monkeypatch.setattr(ev, "league_listings", lambda *_: [
+        (SLUG, upcoming, NOW),
+        ("nhl-ended", {**upcoming, "ended": True, "startTime": "2026-07-01T21:00:00Z"}, NOW),
+        ("nhl-later", {**upcoming, "startTime": "2026-07-01T23:00:00Z"}, NOW),
+    ])
+    result = ev.scan("nhl", Decimal(2), Decimal(".01"))
+    assert result["status"] == "no_live_listings"
+    assert result["upcoming_listings"] == 2
+    assert result["next_start_et"] == "2026-07-01T18:00:00-04:00"
+    assert result["next_games"] == [{"event": SLUG, "title": upcoming["title"]}]
+    assert ev.should_report(result, None, 0)
+    assert not ev.should_report(result, result, 59)
+    assert ev.should_report(result, result, 60)
+    assert ev.should_report({"league": "nhl", "games": [SLUG]}, result, 1)

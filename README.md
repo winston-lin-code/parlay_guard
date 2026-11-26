@@ -310,6 +310,10 @@ old. A changed score or phase during the quote check blocks EV output. Within
 an MLB half inning, the two feeds must also agree on outs and base occupancy.
 This runner reads public data and prints paper estimates.
 
+When there are no live listings, the runner shows the next scheduled start
+in Eastern time when available. Watch mode reports an unchanged idle status
+once a minute and continues checking for newly live listings between updates.
+
 The MLB model uses score, inning, batting side, outs and base occupancy in
 standard nine-inning games, including inning breaks. Historical within-inning
 states come from completed plate appearances. The model groups live states
