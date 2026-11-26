@@ -246,3 +246,10 @@ shows the last pricing decision for each live match with a fresh score and
 counts the pricing checks that failed since the previous status line. A
 stale score entry includes its age. An ROI rejection includes the best
 fee-adjusted ROI the runner found within the stake.
+
+Add `--refresh-book` to request a full REST snapshot once per qualifying
+score update when the streamed book is unusable. The snapshot still needs an
+open market and an exchange timestamp at most three seconds old. The
+`book_source` field identifies the source of any logged paper entry.
+`--interval 3` sets the fastest supported score poll. The source score age,
+one-point check, Elo requirement, and price filters apply with both options.

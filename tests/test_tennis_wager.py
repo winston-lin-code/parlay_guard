@@ -77,6 +77,42 @@ def test_verified_itf_match_and_capped_fill_or_kill(monkeypatch):
                                  diagnostic=diagnostic) is None
     assert diagnostic["reason"] == "no_executable_quote"
 
+    stream.snapshots.clear()
+    request_paths = []
+    def fresh_book(path, **kwargs):
+        request_paths.append((path, kwargs))
+        return {"marketData": {**book, "bids": [], "transactTime": wager.now().isoformat()}}
+
+    monkeypatch.setattr(wager, "public", fresh_book)
+    refreshed = wager.price_candidate(candidate, Decimal("2"), stream, refresh_book=True)
+    assert refreshed[4]["book_source"] == "rest_refresh"
+    assert wager.price_candidate(candidate, Decimal("2"), stream, refresh_book=True)
+    assert request_paths == [(f"/v1/markets/{market['slug']}/book", {"fresh_book": True})]
+
+
+def test_book_refresh_rejects_stale_exchange_timestamp_and_limits_retries(monkeypatch):
+    clock = wager.now()
+    monkeypatch.setattr(wager, "now", lambda: clock)
+    market = "aec-itfme-example"
+    score = {"score_utc": (clock - timedelta(seconds=4)).isoformat(), "score_received_at": clock.isoformat()}
+    stream = wager.BookStream(None, Event())
+    stream.set_markets([market])
+    calls = []
+    def public(path, *, fresh_book):
+        calls.append(path)
+        return {"marketData": {
+            "marketSlug": market, "state": "MARKET_STATE_OPEN", "bids": [], "offers": [],
+            "transactTime": (clock - timedelta(seconds=5)).isoformat(),
+        }}
+
+    monkeypatch.setattr(wager, "public", public)
+    diagnostic = {}
+    assert stream.refresh_after(market, score, diagnostic=diagnostic) is None
+    assert diagnostic == {"reason": "stale_or_invalid_book_timestamp", "book_age_seconds": 5.0}
+    assert stream.refresh_after(market, score) is None
+    assert stream.refresh_after(market, {**score, "score_utc": (clock - timedelta(seconds=21)).isoformat()}) is None
+    assert len(calls) == 1
+
 
 def test_status_diagnostics_distinguish_stale_missing_and_pricing_rejections(monkeypatch, capsys):
     clock = wager.now()

@@ -45,6 +45,7 @@ def fresh(timestamp, max_age):
 
 def rejected(diagnostic, reason, **details):
     if diagnostic is not None:
+        diagnostic.clear()
         diagnostic.update(reason=reason, **details)
     return None
 
@@ -89,6 +90,7 @@ class BookStream:
         self.lock = Lock()
         self.markets = frozenset()
         self.snapshots = {}
+        self.refreshed_scores = {}
         self.error = None
 
     def set_markets(self, markets):
@@ -97,6 +99,8 @@ class BookStream:
             if markets != self.markets:
                 self.markets = markets
                 self.snapshots.clear()
+                self.refreshed_scores = {market: timestamp for market, timestamp in self.refreshed_scores.items()
+                                         if market in markets}
                 self.wake.set()
 
     def publish(self, markets, book):
@@ -115,7 +119,7 @@ class BookStream:
                 return
             else:
                 self.snapshots[slug] = book, now()
-                if not previous:
+                if not previous and "local_book_source" not in book:
                     print(f"Receiving full US book for {slug}", flush=True)
             self.wake.set()
 
@@ -174,6 +178,29 @@ class BookStream:
         if age is None or not 0 <= age <= STREAM_BOOK_MAX_AGE:
             return rejected(diagnostic, "stale_or_invalid_book_timestamp", book_age_seconds=age)
         return snapshot
+
+    def refresh_after(self, market, score, *, diagnostic=None):
+        timestamp = score["score_utc"]
+        if not fresh(timestamp, SCORE_MAX_AGE):
+            return rejected(diagnostic, "stale_score")
+        with self.lock:
+            markets = self.markets
+            if market not in markets or self.refreshed_scores.get(market) == timestamp:
+                return None
+            self.refreshed_scores[market] = timestamp
+        try:
+            book = public(f"/v1/markets/{market}/book", fresh_book=True)["marketData"]
+        except DATA_ERRORS as exc:
+            return rejected(diagnostic, "rest_book_refresh_failed", error_type=type(exc).__name__)
+        streamed = self.usable_after(market, score)
+        if streamed:
+            return streamed
+        if (not isinstance(book, dict) or book.get("marketSlug") != market
+                or book.get("state") != "MARKET_STATE_OPEN"
+                or not all(isinstance(book.get(side), list) for side in ("bids", "offers"))):
+            return rejected(diagnostic, "rest_book_unavailable")
+        self.publish(markets, {**book, "local_book_source": "rest_refresh"})
+        return self.usable_after(market, score, diagnostic=diagnostic)
 
 
 def live_catalog():
@@ -429,13 +456,13 @@ def submit(exchange, store, slug, payload):
     return {"order_id": order_id, "state": status}
 
 
-def price_candidate(candidate, stake, stream=None, *, diagnostic=None):
+def price_candidate(candidate, stake, stream=None, *, refresh_book=False, diagnostic=None):
     game_id, state, event = candidate
     slug = event["slug"]
     try:
         if stream:
             snapshot = stream.usable_after(f"aec-{slug}", state, diagnostic=diagnostic)
-            if not snapshot:
+            if not snapshot and not refresh_book:
                 return None
         else:
             event = public("/v1/events/slug/" + slug)["event"]
@@ -443,6 +470,10 @@ def price_candidate(candidate, stake, stream=None, *, diagnostic=None):
         if selection is None:
             return None
         contract, long, pick = selection
+        if stream and not snapshot:
+            snapshot = stream.refresh_after(contract["slug"], state, diagnostic=diagnostic)
+            if not snapshot:
+                return None
         book = snapshot[0] if stream else public(
             "/v1/markets/" + contract["slug"] + "/book", fresh_book=True
         )["marketData"]
@@ -454,7 +485,8 @@ def price_candidate(candidate, stake, stream=None, *, diagnostic=None):
                 return rejected(diagnostic, "book_changed_during_pricing")
             if stream:
                 detail.update(score_received_at=state.get("score_received_at", state["score_utc"]),
-                              score_source_updated_at=state["score_utc"], book_received_at=snapshot[1].isoformat())
+                              score_source_updated_at=state["score_utc"], book_received_at=snapshot[1].isoformat(),
+                              book_source=book.get("local_book_source", "websocket"))
             return game_id, slug, state, payload, detail
     except DATA_ERRORS as exc:
         print(f"Skipped {slug}: {type(exc).__name__}", flush=True)
@@ -504,7 +536,8 @@ def run(args, exchange, stream_credentials=None):
 
         def check(candidate):
             diagnostic = {} if args.explain else None
-            result = price_candidate(candidate, args.stake, stream, diagnostic=diagnostic)
+            result = price_candidate(candidate, args.stake, stream, refresh_book=args.refresh_book,
+                                     diagnostic=diagnostic)
             return candidate[2]["slug"], result, diagnostic
 
         def record_skip(slug, diagnostic):
@@ -608,6 +641,8 @@ def main():
     streaming.add_argument("--stream-all", action="store_true", help="Discover and stream ITF singles in paper mode")
     streaming.add_argument("--stream-event", help="Stream one ITF singles event in paper mode")
     parser.add_argument("--explain", action="store_true", help="Report score and pricing rejections in streamed paper mode")
+    parser.add_argument("--refresh-book", action="store_true",
+                        help="Try a REST book refresh once per qualifying score when streaming has no usable book")
     parser.add_argument("--env-file", type=Path, help="Read book WebSocket credentials for streaming")
     args = parser.parse_args()
     if args.interval < 3 or (args.daily_cap is not None and args.daily_cap < args.stake):
@@ -620,8 +655,8 @@ def main():
     if args.stream_event and (not SLUG.fullmatch(args.stream_event)
                               or args.stream_event.split("-", 1)[0].upper() not in ITF_LEAGUES):
         parser.error("--stream-event requires an ITF event slug")
-    if (args.env_file or args.explain) and not use_stream:
-        parser.error("--env-file and --explain require --stream-all or --stream-event")
+    if (args.env_file or args.explain or args.refresh_book) and not use_stream:
+        parser.error("--env-file, --explain, and --refresh-book require --stream-all or --stream-event")
     context = nullcontext()
     if args.live:
         key = os.getenv("POLYMARKET_KEY_ID")
