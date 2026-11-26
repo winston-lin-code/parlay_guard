@@ -106,6 +106,11 @@ basketball, and WNBA. It shows one qualifying side per game using a $2 paper
 stake, 60% minimum model probability and +5% minimum screened EV. Other live
 games remain visible with their model status.
 
+NBA and NFL use the last five game-clock minutes of the first half, halftime,
+and the first five game-clock minutes of the second half. Their in-play models
+use the current score and time remaining. The other supported leagues use
+the confirmed halftime break.
+
 The added basketball models use verified ESPN halftime scores and venue status.
 They were trained with 2024 and 2025 SportsDataverse schedule data and evaluated
 on 2026 games. The holdouts evaluate win probabilities. They do not establish

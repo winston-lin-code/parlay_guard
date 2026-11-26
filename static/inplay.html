@@ -147,6 +147,7 @@ details > summary { color: var(--muted); font-size: .84rem; }
   <section class="panel" id="halftime-panel" aria-labelledby="halftime-heading" hidden>
     <header class="list-header"><h2 id="halftime-heading">Halftime moneylines</h2><p id="halftime-count"></p></header>
     <p class="muted halftime-rule">$2 paper stake · 60% minimum model probability · +5% minimum screened EV after estimated fees</p>
+    <p class="muted halftime-rule">NBA and NFL · Last 5 game-clock minutes of the first half, halftime, and first 5 minutes of the second half. Other supported leagues · Halftime only.</p>
     <p id="halftime-status" class="placeholder" role="status">Waiting for the halftime scan</p>
     <ul id="halftime-list" class="halftime-list"></ul>
     <details class="halftime-coverage" id="halftime-coverage" hidden>
@@ -542,7 +543,7 @@ function renderHalftime(now, league, query, games) {
   const status = warning || (!current ? 'Waiting for the halftime scan'
     : ['ITFME', 'ITFWO'].includes(league) ? ''
     : league && !modeled.includes(league) ? 'A halftime model is unavailable for this league.'
-    : !picks.length ? 'No fresh halftime moneylines match the rule and your filters.' : '');
+    : !picks.length ? 'No fresh moneylines match the halftime window and your filters.' : '');
   $('halftime-status').hidden = !status;
   text('halftime-status', status || '');
   const key = JSON.stringify(picks);
@@ -553,7 +554,8 @@ function renderHalftime(now, league, query, games) {
     const heading = element('div', '', 'pick-heading');
     const matchup = element('div', '');
     matchup.append(element('h3', pick.title),
-      element('p', [HALFTIME_LABELS[pick.league] || pick.league, pick.score_text].join(' · '), 'muted'),
+      element('p', [HALFTIME_LABELS[pick.league] || pick.league, pick.score_text, pick.checkpoint,
+        pick.checkpoint !== 'Halftime' ? pick.clock_text : ''].filter(Boolean).join(' · '), 'muted'),
       element('p', pick.side + ' moneyline', 'selection'));
     const link = element('a', 'Open on Polymarket US', 'control wager-button');
     link.href = pick.url;

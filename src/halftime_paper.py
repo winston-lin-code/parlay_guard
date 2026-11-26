@@ -24,6 +24,8 @@ from .us_wager import BOOK_MAX_AGE, CENT, GATEWAY, ONE, SLUG, STANDARD_FEE, Wage
 PAPER_STAKE = Decimal("2")
 MIN_PROBABILITY = 0.60
 MIN_SCREENED_EV = 0.05
+WINDOW_SECONDS = 5 * 60
+QUARTER_SECONDS = {"NBA": 12 * 60, "NFL": 15 * 60}
 LEAGUES = ("NBA", "NFL", "CBB", "WCBB", "CFB", "WNBA")
 OTHER_SCOREBOARDS = {
     "CBB": (COLLEGE_LEAGUES["mbb"]["espn"], COLLEGE_LEAGUES["mbb"]["group"]),
@@ -47,14 +49,31 @@ def game_state(league, event):
     competition = competitions[0]
     status = competition.get("status") or event.get("status") or {}
     kind = status.get("type") or {}
+    if kind.get("state") != "in" or kind.get("completed"):
+        return None
     period = HALF_PERIOD.get(league, 2)
+    current_period, clock = status.get("period"), status.get("clock")
     detail = str(kind.get("shortDetail") or "")
-    halftime = kind.get("name") == "STATUS_HALFTIME" or re.fullmatch(r"(?:half\s*time|ht)", detail, re.I)
+    status_name = kind.get("name")
     break_label = r"end (?:of )?(?:h1|1st(?: half)?)" if period == 1 else r"end (?:of )?(?:q2|2nd(?: quarter)?)"
-    period_end = status.get("period") == period and (
-        kind.get("name") == "STATUS_END_PERIOD" or re.fullmatch(break_label, detail, re.I))
-    if (kind.get("state") != "in" or kind.get("completed") or status.get("clock") != 0
-            or not (period_end or (halftime and status.get("period") == period))):
+    halftime = status_name in ("STATUS_HALFTIME", "STATUS_END_PERIOD") or re.fullmatch(
+        rf"(?:half\s*time|ht|{break_label})", detail, re.I)
+    quarter_seconds = QUARTER_SECONDS.get(league)
+    remaining = None
+    if current_period == period and clock == 0 and halftime:
+        checkpoint = "Halftime"
+        if quarter_seconds:
+            remaining = 2 * quarter_seconds
+    elif (quarter_seconds is not None and status_name == "STATUS_IN_PROGRESS"
+          and type(clock) in (int, float)):
+        if current_period == 2 and 0 < clock <= WINDOW_SECONDS:
+            checkpoint = "Before halftime"
+        elif current_period == 3 and quarter_seconds - WINDOW_SECONDS <= clock <= quarter_seconds:
+            checkpoint = "After halftime"
+        else:
+            return None
+        remaining = (4 - current_period) * quarter_seconds + clock
+    else:
         return None
     sides = {side.get("homeAway"): side for side in competition.get("competitors") or []}
     if set(sides) != {"home", "away"}:
@@ -69,7 +88,8 @@ def game_state(league, event):
         teams[side] = team
         scores[side] = int(score)
     return {"id": event["id"], "league": league, "teams": teams, "scores": scores, "tip": tip, "raw": event,
-            "neutral": bool(competition.get("neutralSite"))}
+            "neutral": bool(competition.get("neutralSite")), "checkpoint": checkpoint,
+            "remaining": remaining, "clock_text": status.get("displayClock") or ""}
 
 
 def scores(league, day):
@@ -90,7 +110,7 @@ def home_probability(game, now):
         artifact = load_nfl()
         if artifact is None:
             raise ValueError("NFL calibration unavailable")
-        (probability, _, _), _ = nfl_forecast((game["scores"]["home"], game["scores"]["away"], 1800), artifact)
+        (probability, _, _), _ = nfl_forecast((game["scores"]["home"], game["scores"]["away"], game["remaining"]), artifact)
         return probability
     if game["league"] in HALF_PERIOD:
         model = load_models().get(game["league"])
@@ -279,6 +299,7 @@ def price_game(game):
     return {**quote, "event": event["slug"], "league": game["league"],
             "title": f"{away['shortDisplayName']} @ {home['shortDisplayName']}",
             "score_text": f"{away['abbreviation']} {game['scores']['away']} · {home['abbreviation']} {game['scores']['home']}",
+            "checkpoint": game["checkpoint"], "clock_text": game["clock_text"],
             "side": game["teams"][selected]["shortDisplayName"], "probability": p,
             "screened_ev": screened_ev, "url": contract_url(event, market, long)}
 
@@ -324,6 +345,9 @@ def screen_halftime():
     now = datetime.now(timezone.utc)
     rows = [pick for key, pick in picks.items() if pick and key in verified
             and games[key]["scores"] == verified[key]["scores"]
+            and games[key]["checkpoint"] == verified[key]["checkpoint"]
+            and (games[key]["remaining"] is None
+                 or -2 <= games[key]["remaining"] - verified[key]["remaining"] <= 15)
             and -5 <= (now - utc(pick["quote_utc"])).total_seconds() <= BOOK_MAX_AGE]
     return {"updated_utc": now.isoformat(), "games_at_halftime": len(games), "leagues": list(LEAGUES), "live_games": live_games,
             "picks": sorted(rows, key=lambda pick: (-pick["screened_ev"], -pick["probability"], pick["event"])),
