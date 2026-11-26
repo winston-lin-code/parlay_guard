@@ -324,6 +324,32 @@ qualifying entries to `data/paper_trades/pro_halftime.sqlite3`.
 python -m src.pro_live_ev --watch --paper-halftime --stake 10 --slippage .01
 ```
 
+To replay this exact rule historically, use timestamped score-verifier
+JSONL and native order-book recordings or PMData Polymarket US L2 Parquet.
+On Windows, collect score-verifier output with
+`python -m src.pro_live_scores --watch | Out-File -Encoding utf8 scores.jsonl`.
+Install `pyarrow` when reading Parquet. The settlement CSV uses this header:
+
+```text
+event,league,official_game_id,home_long,winner,settled_at,tick,fee_coefficient,minimum_quantity
+```
+
+Use verified historical market terms including which team was long
+(`home_long` is 1 for home and 0 for away), and the expected dollar or
+zero settlement (`winner` is `home` or `away`). Use an offset-bearing UTC
+timestamp for `settled_at`. Exclude voids and other nonbinary settlements.
+
+```powershell
+python -m src.pro_halftime_backtest --states scores.jsonl --settlements settlements.csv --books books.parquet --output results/pro-halftime
+```
+
+The replay requires two agreeing score observations at the break. It uses
+an open full book received between those observations and priced within
+five seconds of the recheck. It writes one simulated trade per official
+game, with win rate, spend, P&L, ROI and settled-equity drawdown in
+`summary.csv`. Display prices and score event times without receipt
+timestamps provide insufficient input for this replay.
+
 The MLB model uses score, inning, batting side, outs and base occupancy in
 standard nine-inning games, including inning breaks. Historical within-inning
 states come from completed plate appearances. The model groups live states
