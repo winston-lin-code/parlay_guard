@@ -211,3 +211,27 @@ python -m src.tennis_wager --live --stake 2 --daily-cap 10
 Use Ctrl+C to stop. The default ledger is
 `data/paper_trades/tennis_orders.sqlite3`. Startup can take a few score
 updates, and a score stream with missing identities or stale data is skipped.
+
+#### Streamed score-based paper mode
+
+Choose one ITF singles event. Copy its event slug from the Polymarket US
+listing. Start the runner before the match to connect the full order book in
+advance. In your local, git-ignored `.env` file set `POLYMARKET_US_KEY_ID`
+and `POLYMARKET_US_SECRET_KEY` for the read-only book subscription. On Windows
+install `tzdata` if the Eastern time zone is unavailable.
+
+```powershell
+python -m pip install -r requirements.txt cryptography tzdata
+python -m src.tennis_wager --stream-event YOUR_ITF_EVENT_SLUG --env-file .env --stake 2 --db data/paper_trades/tennis_stream.sqlite3
+```
+
+The runner evaluates any supported point score and wakes up on score and
+book updates. A paper entry uses an open full book received after the score
+and an exchange book timestamp at most three seconds old. It skips scores
+without an explicit point count, unsupported formats, and states where an
+unseen point could already end the match. It prices both possible next points
+and uses the lowest win probability across them and the displayed score.
+The 60% floor, five-point probability haircut, 5% fee-adjusted ROI threshold,
+and one-entry-per-event ledger still apply. The one-point assumption is a
+paper stress test. Local receipt timestamps cannot establish how far the
+score feed trails the court. This mode is paper-only.

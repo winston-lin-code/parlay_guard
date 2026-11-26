@@ -189,6 +189,56 @@ def first_set_checkpoint(score, now):
     return None
 
 
+def next_point_scores(score, period):
+    """Return both next-point states for standard singles with an explicit point score."""
+    match = re.fullmatch(r"(S|TB)([1-3])", period.strip().upper())
+    games, separator, points = score.upper().partition(":")
+    sets = [part.strip() for part in games.split(",")]
+    current = SET_SCORE.fullmatch(sets[-1])
+    if not match or not separator or not current:
+        return ()
+    segment, number = match[1], int(match[2])
+    first, second = map(int, current.groups())
+    if segment == "TB":
+        pair = SET_SCORE.fullmatch(points.strip())
+        if (first, second) != (6, 6) or not pair:
+            return ()
+        values = tuple(map(int, pair.groups()))
+    else:
+        point_labels = {value: label for label, value in POINTS.items()}
+        values = tuple(POINTS.get(point.strip()) for point in points.split("-"))
+        if len(values) != 2 or None in values or (first, second) == (6, 6):
+            return ()
+    results = []
+    for winner in (0, 1):
+        won = [first, second]
+        values_after = list(values)
+        values_after[winner] += 1
+        advantage = values_after[winner] - values_after[1 - winner]
+        target = 7 if segment == "TB" else 4
+        if values_after[winner] >= target and advantage >= 2:
+            won[winner] += 1
+            current_score = f"{won[0]}-{won[1]}"
+            if _completed_set(*won):
+                already_won = any(
+                    int(pair[winner + 1]) > int(pair[2 - winner])
+                    for part in sets[:-1] if (pair := SET_SCORE.match(part))
+                )
+                if number == 3 or already_won:
+                    return ()
+                results.append((", ".join([*sets[:-1], current_score, "0-0:0-0"]), f"S{number + 1}"))
+            else:
+                phase = "TB" if won == [6, 6] else "S"
+                results.append((", ".join([*sets[:-1], current_score + ":0-0"]), f"{phase}{number}"))
+        else:
+            if segment == "S":
+                if min(values_after) >= 4:
+                    values_after = [3, 3]
+                values_after = [point_labels[value] for value in values_after]
+            results.append((games + f":{values_after[0]}-{values_after[1]}", period))
+    return results
+
+
 def tennis_projection(game, score, now=None):
     league = str(game.get("league") or "").upper()
     prefix = game["event"].split("-", 1)[0].upper()
