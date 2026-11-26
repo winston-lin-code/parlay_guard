@@ -97,3 +97,24 @@ Prices are fractions of $1 (`0.55` means 55¢). The scanner outputs model probab
 3. Add automated market-data ingestion with market-ID mapping and price timestamps.
 4. Add walk-forward evaluation and paper-trading logs including fees and slippage.
 5. Expose predictions through a FastAPI backend and a simple frontend.
+
+## Live halftime alerts
+
+Run the terminal watcher from the Parlay Guard folder:
+
+```powershell
+python -m src.watch_halftime --bell
+```
+
+It checks NBA and NFL halftime moneylines on Polymarket US. A new pick must
+reach 60% model probability and +5% screened EV for a $2 paper stake. Screened
+EV includes estimated taker fees and a five-percentage-point probability
+reduction. The watcher checks fresh order-book depth, rechecks the halftime
+score before alerting, and shows the exact market link, quote age and
+fee-inclusive cutoff. The terminal reports when it can no longer verify a
+qualifying quote. Prices can move before you open the link.
+
+Use `--league NBA` or `--league NFL` to watch one league. Use `--once` to test
+the feeds and exit. The default polling interval is two seconds between scan
+starts when feeds respond in time. Press Ctrl+C to stop. The watcher uses public
+data and the same model inputs as the Live EV Scanner. No API key is required.
