@@ -34,7 +34,7 @@ h1 { font-size: clamp(2.25rem, 5vw, 3.6rem); letter-spacing: -.065em; line-heigh
 .feed::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .feed[data-live="true"] { color: var(--mint); }
 .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
-.tabs { display: flex; padding: 3px; gap: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--inset); }
+.tabs { display: flex; flex-wrap: wrap; padding: 3px; gap: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--inset); }
 .tabs button { border: 0; padding: 7px 12px; border-radius: 6px; background: transparent; color: var(--muted); font-size: .86rem; }
 .tabs button[aria-pressed="true"] { background: var(--mint); color: #102219; font-weight: 700; }
 .control { min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--inset); color: var(--text); font-size: .86rem; }
@@ -43,6 +43,10 @@ h1 { font-size: clamp(2.25rem, 5vw, 3.6rem); letter-spacing: -.065em; line-heigh
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 13px; min-width: 0; }
 .list-header { padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .list-header h2 { font-size: .98rem; }
+.halftime-rule { margin: 0 16px 12px; }
+.halftime-list { list-style: none; margin: 0; padding: 0 16px; }
+.halftime-list li { padding: 12px 0; border-top: 1px solid var(--line); }
+.halftime-list .metrics { margin-block: 10px 0; }
 .muted, .list-header p { color: var(--muted); font-size: .84rem; }
 #games { max-height: 72vh; overflow: auto; padding: 6px; }
 .game { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; text-align: left; gap: 4px 10px; width: 100%;
@@ -131,13 +135,20 @@ details > summary { color: var(--muted); font-size: .84rem; }
       <button type="button" data-phase="all" aria-pressed="true">All games</button>
       <button type="button" data-phase="live" aria-pressed="false">Live</button>
       <button type="button" data-phase="pregame" aria-pressed="false">Upcoming</button>
+      <button type="button" data-phase="halftime" aria-pressed="false">Halftime rule</button>
     </div>
     <label class="sr-only" for="sport">Sport or league</label>
     <select id="sport" class="control"><option value="">All leagues</option></select>
     <label class="sr-only" for="search">Find a game</label>
     <input id="search" class="control" type="search" placeholder="Find a team">
   </div>
-  <div class="workspace">
+  <section class="panel" id="halftime-panel" aria-labelledby="halftime-heading" hidden>
+    <header class="list-header"><h2 id="halftime-heading">Halftime moneylines</h2><p id="halftime-count"></p></header>
+    <p class="muted halftime-rule">NBA and NFL · $2 paper stake · 60% minimum model probability · +5% minimum screened EV after estimated fees</p>
+    <p id="halftime-status" class="placeholder" role="status">Waiting for the halftime scan</p>
+    <ul id="halftime-list" class="halftime-list"></ul>
+  </section>
+  <div class="workspace" id="standard-panel">
     <section class="panel" aria-labelledby="games-heading">
       <header class="list-header"><h2 id="games-heading">Games</h2><p id="count"></p></header>
       <div id="games"></div>
@@ -186,6 +197,7 @@ details > summary { color: var(--muted); font-size: .84rem; }
   </div>
   <details class="footer-detail"><summary>How prices and EV are shown</summary>
     <p>Moneyline prices show recent best asks before fees. A price move compares the latest ask with the previous observed ask. EV uses depth for a $10 order, estimated fees, and a five-percentage-point probability stress test. NFL moneyline model probabilities account for the expected half payout on ties.</p>
+    <p>The halftime rule uses fresh Polymarket US moneyline depth for a $2 paper stake and subtracts five percentage points from model probability when calculating screened EV. It ranks one qualifying side per NBA or NFL game by screened EV.</p>
     <p>Live EV is available for supported NBA, NFL, FBS football, and men’s Division I basketball markets. The college models cover validated regular-season markets and periods through two minutes remaining in regulation. College, NFL, NHL, and MLB models cover supported pregame markets. Live scores and moneyline prices can continue for games without live EV.</p>
   </details>
   <details class="footer-detail" id="feed-notices" hidden><summary>Feed notices</summary><ul id="warnings"></ul></details>
@@ -237,6 +249,7 @@ let leaguesFingerprint = '';
 let quotesFingerprint = '';
 let alternativesFingerprint = '';
 let warningsFingerprint = '';
+let halftimeFingerprint = '';
 let loading = false;
 let offline = false;
 const previousPrices = new Map();
@@ -296,7 +309,8 @@ function currentGames(now) {
 }
 
 function updateLeagueOptions(games) {
-  const values = [...new Set([...games.values()].map(game => game.league).filter(Boolean))].sort();
+  const values = phase === 'halftime' ? ['NBA', 'NFL']
+    : [...new Set([...games.values()].map(game => game.league).filter(Boolean))].sort();
   const key = JSON.stringify(values);
   if (key === leaguesFingerprint) return;
   leaguesFingerprint = key;
@@ -457,9 +471,52 @@ function renderDetail(game, now) {
   }
 }
 
+function renderHalftime(now, league, query) {
+  const scan = snapshot.halftime_paper;
+  const current = !offline && fresh(scan?.updated_utc, now);
+  const picks = current ? scan.picks.filter(row => {
+    const quoteAge = age(row.quote_utc, now);
+    return quoteAge >= -5000 && quoteAge <= 15000 && (!league || row.league === league)
+      && row.title.toLowerCase().includes(query);
+  }) : [];
+  text('halftime-count', picks.length + ' qualifying');
+  const warning = offline ? 'Connection interrupted. Waiting for fresh quotes.' : scan?.warnings?.join(' · ');
+  const status = warning || (!current ? 'Waiting for the halftime scan'
+    : !picks.length ? 'No fresh halftime moneylines match the rule and your filters.' : '');
+  $('halftime-status').hidden = !status;
+  text('halftime-status', status || '');
+  const key = JSON.stringify(picks);
+  if (key === halftimeFingerprint) return;
+  halftimeFingerprint = key;
+  $('halftime-list').replaceChildren(...picks.map(pick => {
+    const row = element('li', '');
+    const heading = element('div', '', 'pick-heading');
+    const matchup = element('div', '');
+    matchup.append(element('h3', pick.title),
+      element('p', [pick.league, pick.score_text].join(' · '), 'muted'),
+      element('p', pick.side + ' moneyline', 'selection'));
+    const link = element('a', 'Open on Polymarket US', 'control wager-button');
+    link.href = pick.url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    heading.append(matchup, link);
+    const metrics = element('dl', '', 'metrics');
+    const probability = pick.league === 'NFL' ? 'Tie-adjusted probability' : 'Model win probability';
+    for (const [label, value] of [[probability, pct(pick.probability)],
+      ['Avg. ask', price(pick.ask)], ['Screened EV', edge(pick.screened_ev)]]) {
+      const metric = element('div', '', 'metric');
+      metric.append(element('dt', label), element('dd', value, label === 'Screened EV' ? 'edge' : ''));
+      metrics.append(metric);
+    }
+    row.append(heading, metrics);
+    return row;
+  }));
+}
+
 function render() {
   const now = Date.now();
-  const timestamps = [snapshot.updated_utc, ...(snapshot.board || []).flatMap(game =>
+  const timestamps = phase === 'halftime' ? [snapshot.halftime_paper?.updated_utc]
+    : [snapshot.updated_utc, ...(snapshot.board || []).flatMap(game =>
     [game.phase === 'live' ? game.score_utc : null, ...game.moneyline_quotes.map(row => row.quote_utc)])];
   const live = !offline && timestamps.some(value => fresh(value, now));
   $('feed').dataset.live = String(live);
@@ -469,6 +526,12 @@ function render() {
   updateLeagueOptions(games);
   const query = $('search').value.trim().toLowerCase();
   const league = $('sport').value;
+  $('standard-panel').hidden = phase === 'halftime';
+  $('halftime-panel').hidden = phase !== 'halftime';
+  if (phase === 'halftime') {
+    renderHalftime(now, league, query);
+    return;
+  }
   const phases = {live:0, pregame:1, unknown:2, final:3};
   const filtered = [...games.values()].filter(game => (!league || game.league === league)
     && (phase === 'all' || game.phase === phase) && (game.title || '').toLowerCase().includes(query));
