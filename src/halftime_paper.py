@@ -276,14 +276,15 @@ def price_game(game):
     if screened_ev < MIN_SCREENED_EV:
         return None
     away, home = (game["teams"][key] for key in ("away", "home"))
-    return {**quote, "event": event["slug"], "league": game["league"],
+    return {**quote, "event": event["slug"], "league": game["league"], "fixture_id": str(game["id"]),
+            "market_slug": market["slug"], "long": long, "phase": "halftime",
             "title": f"{away['shortDisplayName']} @ {home['shortDisplayName']}",
             "score_text": f"{away['abbreviation']} {game['scores']['away']} · {home['abbreviation']} {game['scores']['home']}",
             "side": game["teams"][selected]["shortDisplayName"], "probability": p,
             "screened_ev": screened_ev, "url": contract_url(event, market, long)}
 
 
-def screen_halftime():
+def screen_halftime(*, leagues=LEAGUES, include_live_inventory=True, recorded=()):
     started = datetime.now(timezone.utc)
     day = started.astimezone(ET).date()
     days = (day - timedelta(days=1), day) if started.astimezone(ET).hour < 6 else (day,)
@@ -305,18 +306,23 @@ def screen_halftime():
             return None
 
     with ThreadPoolExecutor(max_workers=6) as pool:
-        keys = [(league, date) for league in LEAGUES for date in days]
-        inventory = pool.submit(live_inventory)
+        keys = [(league, date) for league in leagues for date in days]
+        inventory = pool.submit(live_inventory) if include_live_inventory else None
         slates = list(pool.map(lambda key: fetch(*key), keys))
         games = {key: game for slate in slates for key, game in slate.items()}
+        unrecorded = {key: game for key, game in games.items()
+                      if (key[0], str(key[1])) not in recorded}
+        listings, live_games = {}, None
         try:
-            listings, live_games = inventory.result()
+            if inventory is not None:
+                listings, live_games = inventory.result()
+            elif any(game["league"] in OTHER_SCOREBOARDS for game in unrecorded.values()):
+                listings, live_games = live_inventory()
         except FEED_ERRORS:
             warnings.add("Polymarket US live event listings unavailable")
-            listings, live_games = {}, None
-        for game in games.values():
+        for game in unrecorded.values():
             game["listed_moneylines"] = listings.get(game["league"], [])
-        picks = dict(zip(games, pool.map(price, games.values())))
+        picks = dict(zip(unrecorded, pool.map(price, unrecorded.values())))
         needed = {(games[key]["league"], games[key]["tip"].astimezone(ET).date())
                   for key, pick in picks.items() if pick}
         verified = {key: game for slate in pool.map(lambda key: fetch(*key), sorted(needed))
