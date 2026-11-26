@@ -181,3 +181,33 @@ To refit with the same historical inputs:
 python -m src.train_tennis_halftime --men atp_matches_futures_202{2,3,4,5,6}.csv \
   --women wta_matches_qual_itf_202{2,3,4,5,6}.csv
 ```
+
+### Local ITF singles wager runner
+
+Install the project requirements and start in paper mode to verify your feeds.
+The runner needs both a fresh sports WebSocket score with identifiable sides
+and a matching Polymarket US ITF singles moneyline. It prices the late first
+set or the first five minutes after an observed set-two transition. It requires
+the Elo-adjusted forecast, 60% minimum model probability, and +5% minimum
+screened EV using the capped limit price and estimated fees.
+
+```powershell
+python -m pip install -r requirements.txt
+python -m src.tennis_wager --stake 2
+```
+
+Real-order mode requires local Polymarket US credentials in
+`POLYMARKET_KEY_ID` and `POLYMARKET_SECRET_KEY` and a UTC daily exposure cap.
+The stake is a maximum all-in cost. The daily cap counts reserved exposure
+including canceled or unresolved attempts. Each order uses a limit with
+fill-or-kill, and the SQLite ledger records one attempt per event and mode.
+Use the same ledger path across restarts. The runner stops on an ambiguous
+submission response. Reconcile the exchange activity before trading again.
+
+```powershell
+python -m src.tennis_wager --live --stake 2 --daily-cap 10
+```
+
+Use Ctrl+C to stop. The default ledger is
+`data/paper_trades/tennis_orders.sqlite3`. Startup can take a few score
+updates, and a score stream with missing identities or stale data is skipped.
