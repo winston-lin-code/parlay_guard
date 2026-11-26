@@ -240,3 +240,9 @@ and one-entry-per-event ledger still apply. The one-point assumption is a
 paper stress test. The US score timestamp shows when the provider updated
 its feed. The time from the actual point to that update remains unknown.
 This mode is paper-only.
+
+Add `--explain` to print a JSON diagnostic with each status line. It
+shows the last pricing decision for each live match with a fresh score and
+counts the pricing checks that failed since the previous status line. A
+stale score entry includes its age. An ROI rejection includes the best
+fee-adjusted ROI the runner found within the stake.

@@ -1,5 +1,6 @@
 from datetime import timedelta
 from decimal import Decimal
+import json
 from threading import Event
 from types import SimpleNamespace
 
@@ -54,11 +55,47 @@ def test_verified_itf_match_and_capped_fill_or_kill(monkeypatch):
     candidate = ("game", early, event)
     assert wager.price_candidate(candidate, Decimal("2"), stream)[4]["assumed_unseen_points"] == 1
     stream.snapshots[market["slug"]] = book, wager.now() - timedelta(seconds=1)
-    assert wager.price_candidate(candidate, Decimal("2"), stream) is None
+    diagnostic = {}
+    assert wager.price_candidate(candidate, Decimal("2"), stream, diagnostic=diagnostic) is None
+    assert diagnostic["reason"] == "book_received_before_score"
     stream.snapshots[market["slug"]] = (
         {**book, "transactTime": (wager.now() - timedelta(seconds=4)).isoformat()}, wager.now(),
     )
-    assert wager.price_candidate(candidate, Decimal("2"), stream) is None
+    diagnostic = {}
+    assert wager.price_candidate(candidate, Decimal("2"), stream, diagnostic=diagnostic) is None
+    assert diagnostic["reason"] == "stale_or_invalid_book_timestamp"
+
+    diagnostic = {}
+    assert wager.order_for_stake({**pick, "probability": .55}, market, long, book, Decimal("2"),
+                                 diagnostic=diagnostic) is None
+    assert diagnostic["reason"] == "roi_below_floor"
+    assert Decimal(diagnostic["limit"]) == Decimal(".50")
+    assert diagnostic["screened_roi"] < diagnostic["minimum_roi"]
+
+    diagnostic = {}
+    assert wager.order_for_stake(pick, market, long, {**book, "offers": []}, Decimal("2"),
+                                 diagnostic=diagnostic) is None
+    assert diagnostic["reason"] == "no_executable_quote"
+
+
+def test_status_diagnostics_distinguish_stale_missing_and_pricing_rejections(monkeypatch, capsys):
+    clock = wager.now()
+    monkeypatch.setattr(wager, "now", lambda: clock)
+    events = {
+        slug: {"slug": slug, "live": True} for slug in ("itfme-stale", "itfme-missing", "itfme-priced")
+    }
+    scores = wager.Scores()
+    scores.games["itfme-stale"] = {"score_utc": (clock - timedelta(seconds=25)).isoformat()}
+    wager.report_diagnostics(events, scores, [("itfme-priced", {})],
+                             [("itfme-priced", {}, events["itfme-priced"])],
+                             {"itfme-priced": {"reason": "missing_elo_rating"}}, {"missing_elo_rating": 2})
+    output = json.loads(capsys.readouterr().out)
+    assert output["matches"] == {
+        "itfme-stale": {"reason": "stale_score", "score_age_seconds": 25.0},
+        "itfme-missing": {"reason": "no_usable_us_score"},
+        "itfme-priced": {"reason": "missing_elo_rating"},
+    }
+    assert output["pricing_skips_since_last_status"] == {"missing_elo_rating": 2}
 
 
 def test_stream_catalog_discovers_live_and_near_start_singles_in_both_leagues(monkeypatch):

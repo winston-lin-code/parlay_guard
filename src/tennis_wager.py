@@ -1,6 +1,7 @@
 """Local live runner for ITF singles match-winner orders on Polymarket US."""
 
 import argparse
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, nullcontext
 from datetime import datetime, timedelta, timezone
@@ -40,6 +41,12 @@ def now():
 def fresh(timestamp, max_age):
     value = utc(timestamp)
     return value is not None and -5 <= (now() - value).total_seconds() <= max_age
+
+
+def rejected(diagnostic, reason, **details):
+    if diagnostic is not None:
+        diagnostic.update(reason=reason, **details)
+    return None
 
 
 class Scores:
@@ -152,15 +159,21 @@ class BookStream:
             if markets == self.markets:
                 stop.wait(2)
 
-    def usable_after(self, market, score):
+    def usable_after(self, market, score, *, diagnostic=None):
         with self.lock:
             snapshot = self.snapshots.get(market)
+        if not snapshot:
+            return rejected(diagnostic, "no_open_book_snapshot")
         received = utc(score.get("score_received_at") or score.get("score_utc"))
-        if snapshot and received and snapshot[1] >= received:
-            observed = utc(snapshot[0].get("transactTime"))
-            if observed and 0 <= (now() - observed).total_seconds() <= STREAM_BOOK_MAX_AGE:
-                return snapshot
-        return None
+        if not received:
+            return rejected(diagnostic, "missing_score_receipt_time")
+        if snapshot[1] < received:
+            return rejected(diagnostic, "book_received_before_score")
+        observed = utc(snapshot[0].get("transactTime"))
+        age = (now() - observed).total_seconds() if observed else None
+        if age is None or not 0 <= age <= STREAM_BOOK_MAX_AGE:
+            return rejected(diagnostic, "stale_or_invalid_book_timestamp", book_age_seconds=age)
+        return snapshot
 
 
 def live_catalog():
@@ -264,39 +277,44 @@ def us_score(event, received_at):
     }
 
 
-def match_selection(event, score, *, score_based=False):
+def match_selection(event, score, *, score_based=False, diagnostic=None):
     slug = event.get("slug") or ""
-    if ((score.get("event_slug") and slug != score["event_slug"])
-            or event.get("live") is not True or not fresh(score.get("score_utc"), SCORE_MAX_AGE)):
-        return None
+    if not fresh(score.get("score_utc"), SCORE_MAX_AGE):
+        return rejected(diagnostic, "stale_score")
+    if (score.get("event_slug") and slug != score["event_slug"]) or event.get("live") is not True:
+        return rejected(diagnostic, "score_and_event_mismatch")
     contract = tennis_contract(event)
     if contract is None:
-        return None
+        return rejected(diagnostic, "missing_match_winner_contract")
     first, _, second = event["title"].partition(" vs. ")
     sides = contract.get("marketSides") or []
     if len(sides) != 2 or {side.get("long") for side in sides} != {True, False}:
-        return None
+        return rejected(diagnostic, "ambiguous_market_sides")
     ordered = []
     for column in score["score_columns"]:
         matches = [side for side in sides if name(column) in team_names(side)]
         if len(matches) != 1:
-            return None
+            return rejected(diagnostic, "ambiguous_score_columns")
         ordered.append(matches[0])
     if len(ordered) != 2 or ordered[0] is ordered[1]:
-        return None
+        return rejected(diagnostic, "ambiguous_score_columns")
     names = []
     for side in ordered:
         labels = [label for label in (first, second) if name(label) in team_names(side)]
         if len(labels) != 1:
-            return None
+            return rejected(diagnostic, "ambiguous_player_names")
         names.append(labels[0])
     if len(set(names)) != 2:
-        return None
+        return rejected(diagnostic, "ambiguous_player_names")
     match = {"event": slug, "title": event["title"]}
     ordered_score = {**score, "score_order": " / ".join(names)}
     projection = tennis_projection(match, ordered_score, now())
-    if not projection or not projection["elo_prior"] or (not score_based and not projection["checkpoint"]):
-        return None
+    if not projection:
+        return rejected(diagnostic, "unsupported_point_score")
+    if not projection["elo_prior"]:
+        return rejected(diagnostic, "missing_elo_rating")
+    if not score_based and not projection["checkpoint"]:
+        return rejected(diagnostic, "outside_set_break_window")
     first_probability = projection["first_probability"]
     selected = int(first_probability < .5)
     probability = (first_probability, 1 - first_probability)[selected]
@@ -304,48 +322,66 @@ def match_selection(event, score, *, score_based=False):
     if score_based:
         successors = next_point_scores(score["score_text"], score["period_text"])
         if not successors:
-            return None
+            return rejected(diagnostic, "cannot_stress_test_next_point")
         for next_score, next_period in successors:
             alternative = tennis_projection(match, {**ordered_score, "score_text": next_score,
                                                      "period_text": next_period})
             if not alternative:
-                return None
+                return rejected(diagnostic, "cannot_stress_test_next_point")
             probability = min(probability, alternative["first_probability" if selected == 0 else "second_probability"])
-    if probability < MIN_PROBABILITY or ordered[selected].get("tradable") is not True:
-        return None
+    if probability < MIN_PROBABILITY:
+        return rejected(diagnostic, "probability_below_floor", side=names[selected],
+                        displayed_probability=displayed_probability, conservative_probability=probability,
+                        minimum_probability=MIN_PROBABILITY)
+    if ordered[selected].get("tradable") is not True:
+        return rejected(diagnostic, "side_unavailable")
     pick = {"side": names[selected], "probability": probability, "checkpoint": projection["checkpoint"]}
     if score_based:
         pick.update(displayed_probability=displayed_probability, assumed_unseen_points=1)
     return contract, ordered[selected]["long"], pick
 
 
-def order_for_stake(pick, contract, long, book, stake):
+def order_for_stake(pick, contract, long, book, stake, *, diagnostic=None):
     # Find the largest whole-contract quantity that fits the worst-case limit and fee.
     minimum = max(1, int(decimal(contract["minimumTradeQty"]).to_integral_value(rounding=ROUND_CEILING)))
-    low, high = minimum, min(int(stake / CENT), 10_000)
+    max_quantity = min(int(stake / CENT), 10_000)
+    low, high = minimum, max_quantity
     best = None
+    over_budget = None
+    quote_error = None
     while low <= high:
         quantity = (low + high) // 2
         try:
             payload, summary = quote_order(pick, contract, long, quantity, book, now())
-        except WagerError:
+        except WagerError as exc:
+            quote_error = str(exc)
             high = quantity - 1
             continue
         if decimal(summary["total_estimate"]) <= stake:
             best = payload, summary
             low = quantity + 1
         else:
+            over_budget = summary["total_estimate"]
             high = quantity - 1
+    if not best:
+        if over_budget is not None or minimum > max_quantity:
+            return rejected(diagnostic, "stake_too_small", stake=str(stake), quoted_cost=over_budget)
+        return rejected(diagnostic, "no_executable_quote", detail=quote_error)
+    best_failed_quote = best[1]
     while best:
         payload, summary = best
         if summary["screened_ev"] >= MIN_SCREENED_EV:
             payload["manualOrderIndicator"] = "MANUAL_ORDER_INDICATOR_AUTOMATIC"
             return best
+        if summary["screened_ev"] > best_failed_quote["screened_ev"]:
+            best_failed_quote = summary
         quantity = payload["quantity"] - 1
         if quantity < minimum:
             break
         best = quote_order(pick, contract, long, quantity, book, now())
-    return None
+    return rejected(diagnostic, "roi_below_floor", limit=best_failed_quote["limit"],
+                    quantity=best_failed_quote["quantity"], cost=best_failed_quote["total_estimate"],
+                    screened_roi=best_failed_quote["screened_ev"], minimum_roi=MIN_SCREENED_EV)
 
 
 def ledger(path):
@@ -393,36 +429,60 @@ def submit(exchange, store, slug, payload):
     return {"order_id": order_id, "state": status}
 
 
-def price_candidate(candidate, stake, stream=None):
+def price_candidate(candidate, stake, stream=None, *, diagnostic=None):
     game_id, state, event = candidate
     slug = event["slug"]
     try:
         if stream:
-            snapshot = stream.usable_after(f"aec-{slug}", state)
+            snapshot = stream.usable_after(f"aec-{slug}", state, diagnostic=diagnostic)
             if not snapshot:
                 return None
         else:
             event = public("/v1/events/slug/" + slug)["event"]
-        selection = match_selection(event, state, score_based=stream is not None)
+        selection = match_selection(event, state, score_based=stream is not None, diagnostic=diagnostic)
         if selection is None:
             return None
         contract, long, pick = selection
         book = snapshot[0] if stream else public(
             "/v1/markets/" + contract["slug"] + "/book", fresh_book=True
         )["marketData"]
-        ticket = order_for_stake(pick, contract, long, book, stake)
+        ticket = order_for_stake(pick, contract, long, book, stake, diagnostic=diagnostic)
         if ticket:
             payload, summary = ticket
             detail = {**summary, **pick, "score": state["score_text"]}
             if stream and stream.usable_after(contract["slug"], state) is not snapshot:
-                return None
+                return rejected(diagnostic, "book_changed_during_pricing")
             if stream:
                 detail.update(score_received_at=state.get("score_received_at", state["score_utc"]),
                               score_source_updated_at=state["score_utc"], book_received_at=snapshot[1].isoformat())
             return game_id, slug, state, payload, detail
     except DATA_ERRORS as exc:
         print(f"Skipped {slug}: {type(exc).__name__}", flush=True)
+        return rejected(diagnostic, "pricing_error", error_type=type(exc).__name__)
     return None
+
+
+def report_diagnostics(events, scores, active, candidates, latest, rejected_counts):
+    active_slugs = {slug for slug, _ in active}
+    candidate_slugs = {event["slug"] for _, _, event in candidates}
+    matches = {}
+    reference = now()
+    for slug, event in events.items():
+        if event.get("live") is not True:
+            continue
+        state = scores.get(slug)
+        if slug in candidate_slugs:
+            matches[slug] = latest.get(slug, {"reason": "awaiting_pricing"})
+        elif slug in active_slugs:
+            matches[slug] = {"reason": "already_logged"}
+        else:
+            observed = utc(state.get("score_utc"))
+            matches[slug] = (
+                {"reason": "stale_score", "score_age_seconds": round((reference - observed).total_seconds(), 1)}
+                if observed else {"reason": "no_usable_us_score"}
+            )
+    print(json.dumps({"diagnostic": "tennis_pricing", "matches": matches,
+                      "pricing_skips_since_last_status": dict(rejected_counts)}), flush=True)
 
 
 def run(args, exchange, stream_credentials=None):
@@ -439,6 +499,19 @@ def run(args, exchange, stream_credentials=None):
         worker.start()
         heartbeat = refresh_catalog = 0
         events = {}
+        latest = {}
+        rejected_counts = Counter()
+
+        def check(candidate):
+            diagnostic = {} if args.explain else None
+            result = price_candidate(candidate, args.stake, stream, diagnostic=diagnostic)
+            return candidate[2]["slug"], result, diagnostic
+
+        def record_skip(slug, diagnostic):
+            if args.explain:
+                latest[slug] = diagnostic
+                rejected_counts[diagnostic["reason"]] += 1
+
         try:
             while not stop.is_set():
                 wake.clear()
@@ -472,14 +545,16 @@ def run(args, exchange, stream_credentials=None):
                               if (event := catalog_event(events, state)) is not None
                               and not store.execute("SELECT 1 FROM tennis_orders WHERE mode=? AND event=?",
                                                     (mode, event["slug"])).fetchone()]
-                if monotonic() >= heartbeat:
+                report_due = monotonic() >= heartbeat
+                if report_due:
                     reported = sum(event.get("live") is True for event in events.values())
                     print(f"{mode.upper()} · {len(events)} ITF listings ({reported} live) · {len(active)} fresh scores "
                           f"· {len(candidates)} matched and eligible for pricing", flush=True)
                     heartbeat = monotonic() + 30
-                results = pool.map(lambda candidate: price_candidate(candidate, args.stake, stream), candidates)
-                for result in results:
+                for slug, result, diagnostic in pool.map(check, candidates):
                     if not result:
+                        if diagnostic:
+                            record_skip(slug, diagnostic)
                         continue
                     game_id, slug, state, payload, summary = result
                     newest = scores.get(game_id)
@@ -488,15 +563,24 @@ def run(args, exchange, stream_credentials=None):
                             or (not stream and first_set_checkpoint(newest, now()) != summary["checkpoint"])
                             or any(newest.get(key) != state.get(key)
                                    for key in ("phase", "score_text", "period_text", "score_columns"))):
+                        record_skip(slug, {"reason": "score_or_book_changed_before_entry"})
                         continue
                     if stream:
                         current = stream.usable_after(f"aec-{slug}", newest)
                         if not current or current[1].isoformat() != summary["book_received_at"]:
+                            record_skip(slug, {"reason": "book_changed_before_entry"})
                             continue
                     if not reserve(store, mode, slug, summary, args.daily_cap):
+                        record_skip(slug, {"reason": "ledger_or_daily_cap"})
                         continue
+                    if args.explain:
+                        latest[slug] = {"reason": "paper_entry_logged"}
                     print(json.dumps({"mode": mode, "event": slug, **summary,
                                       **(submit(exchange, store, slug, payload) if exchange else {})}), flush=True)
+                if args.explain and report_due:
+                    report_diagnostics(events, scores, active, candidates, latest, rejected_counts)
+                    latest.clear()
+                    rejected_counts.clear()
                 wake.wait(args.interval)
         finally:
             stop.set()
@@ -523,6 +607,7 @@ def main():
     streaming = parser.add_mutually_exclusive_group()
     streaming.add_argument("--stream-all", action="store_true", help="Discover and stream ITF singles in paper mode")
     streaming.add_argument("--stream-event", help="Stream one ITF singles event in paper mode")
+    parser.add_argument("--explain", action="store_true", help="Report score and pricing rejections in streamed paper mode")
     parser.add_argument("--env-file", type=Path, help="Read book WebSocket credentials for streaming")
     args = parser.parse_args()
     if args.interval < 3 or (args.daily_cap is not None and args.daily_cap < args.stake):
@@ -535,8 +620,8 @@ def main():
     if args.stream_event and (not SLUG.fullmatch(args.stream_event)
                               or args.stream_event.split("-", 1)[0].upper() not in ITF_LEAGUES):
         parser.error("--stream-event requires an ITF event slug")
-    if args.env_file and not use_stream:
-        parser.error("--env-file requires --stream-all or --stream-event")
+    if (args.env_file or args.explain) and not use_stream:
+        parser.error("--env-file and --explain require --stream-all or --stream-event")
     context = nullcontext()
     if args.live:
         key = os.getenv("POLYMARKET_KEY_ID")
