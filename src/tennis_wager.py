@@ -1,6 +1,7 @@
 """Local live runner for ITF singles match-winner orders on Polymarket US."""
 
 import argparse
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, nullcontext
 from datetime import datetime, timezone
@@ -116,7 +117,7 @@ def catalog_event(events, score):
     return matches[0] if len(matches) == 1 else None
 
 
-def match_selection(event, score):
+def match_selection(event, score, report=lambda reason: None):
     slug = event.get("slug") or ""
     first, separator, second = str(event.get("title") or "").partition(" vs. ")
     if (not separator or not SLUG.fullmatch(slug) or (score.get("event_slug") and slug != score["event_slug"])
@@ -124,51 +125,70 @@ def match_selection(event, score):
             or event.get("live") is not True or event.get("ended") is True
             or event.get("active") is not True or event.get("closed") is not False
             or not fresh(score.get("score_utc"), SCORE_MAX_AGE)):
+        report("listing closed, score stale, or match unsupported")
         return None
     contracts = [market for market in event.get("markets", [])
                  if market.get("slug") == f"aec-{slug}" and market.get("marketType") == "moneyline"
                  and market.get("sportsMarketType") == "tennis_match_winner"
                  and market.get("active") is True and market.get("closed") is False]
     if len(contracts) != 1:
+        report("no unique match-winner market")
         return None
     contract = contracts[0]
     sides = contract.get("marketSides") or []
     if len(sides) != 2 or {side.get("long") for side in sides} != {True, False}:
+        report("invalid market sides")
         return None
     ordered = []
     for column in score["score_columns"]:
         matches = [side for side in sides if name(column) in team_names(side)]
         if len(matches) != 1:
+            report("score player could not be matched")
             return None
         ordered.append(matches[0])
     if len(ordered) != 2 or ordered[0] is ordered[1]:
+        report("score order ambiguous")
         return None
     names = []
     for side in ordered:
         labels = [label for label in (first, second) if name(label) in team_names(side)]
         if len(labels) != 1:
+            report("market player could not be matched")
             return None
         names.append(labels[0])
     if len(set(names)) != 2:
+        report("market player identity ambiguous")
         return None
     projection = tennis_projection({"event": slug, "title": event["title"]},
                                    {**score, "score_order": " / ".join(names)}, now())
-    if not projection or not projection["checkpoint"] or not projection["elo_prior"]:
+    if not projection:
+        report("unsupported score format")
+        return None
+    if not projection["checkpoint"]:
+        report("outside first-set-break window")
+        return None
+    if not projection["elo_prior"]:
+        report("one or both Elo ratings unavailable")
         return None
     first_probability = projection["first_probability"]
     selected = int(first_probability < .5)
     probability = (first_probability, 1 - first_probability)[selected]
-    if probability < MIN_PROBABILITY or ordered[selected].get("tradable") is not True:
+    if probability < MIN_PROBABILITY:
+        report("model probability below 60%")
+        return None
+    if ordered[selected].get("tradable") is not True:
+        report("selected side paused")
         return None
     return contract, ordered[selected]["long"], {"side": names[selected], "probability": probability,
                                                    "checkpoint": projection["checkpoint"]}
 
 
-def order_for_stake(pick, contract, long, book, stake):
+def order_for_stake(pick, contract, long, book, stake, report=lambda reason: None):
     # Find the largest whole-contract quantity that fits the worst-case limit and fee.
     minimum = max(1, int(decimal(contract["minimumTradeQty"]).to_integral_value(rounding=ROUND_CEILING)))
     low, high = minimum, min(int(stake / CENT), 10_000)
     best = None
+    quote_available = False
     while low <= high:
         quantity = (low + high) // 2
         try:
@@ -176,11 +196,16 @@ def order_for_stake(pick, contract, long, book, stake):
         except WagerError:
             high = quantity - 1
             continue
+        quote_available = True
         if decimal(summary["total_estimate"]) <= stake:
             best = payload, summary
             low = quantity + 1
         else:
             high = quantity - 1
+    if best is None:
+        report("minimum order exceeds stake" if quote_available or minimum > int(stake / CENT)
+               else "no fresh executable quote or insufficient depth")
+        return None
     while best:
         payload, summary = best
         if summary["screened_ev"] >= MIN_SCREENED_EV:
@@ -190,6 +215,7 @@ def order_for_stake(pick, contract, long, book, stake):
         if quantity < minimum:
             break
         best = quote_order(pick, contract, long, quantity, book, now())
+    report("screened EV below +5%")
     return None
 
 
@@ -241,24 +267,25 @@ def submit(exchange, store, slug, payload):
 def price_candidate(candidate, stake):
     game_id, state, event = candidate
     slug = event["slug"]
+    reasons = []
     try:
         event = public("/v1/events/slug/" + slug)["event"]
         if state.get("source") == "catalog" and (event.get("score") != state["score_text"]
                                                   or event.get("period") != state["period_text"]):
-            return None
-        selection = match_selection(event, state)
+            return None, "catalog score changed before pricing"
+        selection = match_selection(event, state, reasons.append)
         if selection is None:
-            return None
+            return None, reasons[-1]
         contract, long, pick = selection
         book = public("/v1/markets/" + contract["slug"] + "/book", fresh_book=True)["marketData"]
-        ticket = order_for_stake(pick, contract, long, book, stake)
+        ticket = order_for_stake(pick, contract, long, book, stake, reasons.append)
         if ticket:
             payload, summary = ticket
-            return game_id, slug, state, payload, {**summary, **pick, "score": state["score_text"],
-                                                         "score_source": state.get("source", "websocket")}
+            return (game_id, slug, state, payload, {**summary, **pick, "score": state["score_text"],
+                                                   "score_source": state.get("source", "websocket")}), None
     except DATA_ERRORS as exc:
-        print(f"Skipped {slug}: {type(exc).__name__}", flush=True)
-    return None
+        return None, f"pricing error ({type(exc).__name__})"
+    return None, reasons[-1]
 
 
 def run(args, exchange):
@@ -271,6 +298,7 @@ def run(args, exchange):
         worker.start()
         heartbeat = refresh_catalog = 0
         events, paper_scores = {}, {}
+        skipped = Counter()
         try:
             while not stop.is_set():
                 if monotonic() >= refresh_catalog:
@@ -295,10 +323,15 @@ def run(args, exchange):
                     print(f"{mode.upper()} · {len(events)} ITF listings · {len(active)} fresh WebSocket scores "
                           f"· {len(paper_scores)} fresh paper catalog scores · {len(candidates)} queued for screening",
                           flush=True)
+                    if skipped:
+                        counts = " · ".join(f"{reason}: {count}" for reason, count in skipped.most_common())
+                        print(f"Skipped since last update · {counts}", flush=True)
+                        skipped.clear()
                     heartbeat = monotonic() + 30
                 results = pool.map(lambda candidate: price_candidate(candidate, args.stake), candidates)
-                for result in results:
-                    if not result:
+                for result, reason in results:
+                    if reason:
+                        skipped[reason] += 1
                         continue
                     game_id, slug, state, payload, summary = result
                     newest = paper_scores.get(slug, {}) if state.get("source") == "catalog" else scores.get(game_id)
@@ -309,8 +342,10 @@ def run(args, exchange):
                             or first_set_checkpoint(newest, now()) != summary["checkpoint"]
                             or any(newest.get(key) != state.get(key)
                                    for key in ("phase", "score_text", "period_text", "score_columns"))):
+                        skipped["score, quote, or checkpoint changed before entry"] += 1
                         continue
                     if not reserve(store, mode, slug, summary, args.daily_cap):
+                        skipped["already recorded, pending order, or daily cap"] += 1
                         continue
                     print(json.dumps({"mode": mode, "event": slug, **summary,
                                       **(submit(exchange, store, slug, payload) if exchange else {})}), flush=True)
