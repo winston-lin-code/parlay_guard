@@ -126,7 +126,7 @@ def contract_url(event, contract, long):
             + urlencode({"marketSlug": market_slug, "outcomeId": outcome}))
 
 
-def quote_order(pick, contract, long, quantity, book, now):
+def quote_order(pick, contract, long, quantity, book, now, *, slippage=Decimal("0")):
     slug = contract["slug"]
     timestamp = utc(book.get("transactTime"))
     if book.get("marketSlug") != slug:
@@ -158,9 +158,12 @@ def quote_order(pick, contract, long, quantity, book, now):
         raise WagerError("The quoted price does not match the US market tick size.")
     # Bound fees even if fills occur at better prices, where the fee may be higher.
     coefficient = max(STANDARD_FEE, decimal(contract.get("feeCoefficient") or STANDARD_FEE))
-    peak = min(limit, Decimal(".5"))
+    effective = limit + slippage
+    if not limit <= effective <= ONE:
+        raise WagerError("The simulated slippage makes this contract unaffordable.")
+    peak = min(effective, Decimal(".5"))
     fee_cap = (coefficient * quantity * peak * (ONE - peak)).quantize(CENT, rounding=ROUND_CEILING)
-    total = limit * quantity + fee_cap
+    total = effective * quantity + fee_cap
     screened = max(Decimal(0), decimal(pick["probability"]) - decimal(PROBABILITY_HAIRCUT))
     payload = {"marketSlug": slug, "type": "ORDER_TYPE_LIMIT",
                "price": {"value": str(limit if long else ONE - limit), "currency": "USD"},

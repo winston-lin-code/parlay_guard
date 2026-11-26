@@ -108,6 +108,8 @@ def nhl_state(game):
     return {
         "score_away_home": scores(game["awayTeam"].get("score"), game["homeTeam"].get("score")),
         "phase": phase, "period": period, "clock": clock.get("timeRemaining"),
+        "seconds_remaining": clock.get("secondsRemaining"),
+        "period_type": (game.get("periodDescriptor") or {}).get("periodType"),
     }
 
 
@@ -125,9 +127,12 @@ def mlb_state(payload):
     stamp = (payload.get("metaData") or {}).get("timeStamp")
     published = datetime.strptime(stamp, "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc) if stamp else None
     plays = (live.get("plays") or {}).get("allPlays") or []
+    offense = line.get("offense") or {}
+    bases = [bool(offense.get(base)) for base in ("first", "second", "third")] if offense.get("team") else None
     return {
         "score_away_home": scores(teams["away"].get("runs"), teams["home"].get("runs")),
-        "phase": phase, "period": line.get("currentInning"), "outs": line.get("outs"),
+        "phase": phase, "period": line.get("currentInning"), "outs": line.get("outs"), "bases": bases,
+        "scheduled_innings": line.get("scheduledInnings"),
         "source_updated_at": published.isoformat() if published else None,
         "last_completed_play_at": next((p["about"].get("endTime") for p in reversed(plays)
                                        if p.get("about", {}).get("isComplete") and p["about"].get("endTime")), None),
@@ -140,7 +145,7 @@ def market_state(league, event):
         return {}
     raw_score = re.fullmatch(r"(\d+)\s*-\s*(\d+)", str(state.get("score") or ""))
     raw_period = " ".join(str(state.get("period") or "").upper().split())
-    phase, period, outs = "unavailable", None, None
+    phase, period, outs, bases = "unavailable", None, None, None
     if state.get("ended") is True and raw_period in ("FT", "VFT", "FINAL", "F"):
         phase = "final"
     elif state.get("live") is True:
@@ -151,17 +156,20 @@ def market_state(league, event):
         else:
             baseball = state.get("baseballState") or {}
             outs = baseball.get("outs")
-            match = re.fullmatch(r"(TOP|T|BOTTOM|BOT|B|MIDDLE|MID|END)\s*(\d{1,2})", raw_period)
+            occupancy = [baseball.get(field) for field in ("onFirst", "onSecond", "onThird")]
+            if all(type(value) is bool for value in occupancy):
+                bases = occupancy
+            match = re.fullmatch(r"(TOP|T|BOTTOM|BOT|B|MIDDLE|MID|M|END|E)\s*(\d{1,2})", raw_period)
             if match:
                 labels = {"T": "top", "TOP": "top", "B": "bottom", "BOT": "bottom", "BOTTOM": "bottom",
-                          "MID": "middle", "MIDDLE": "middle", "END": "end"}
+                          "MID": "middle", "MIDDLE": "middle", "M": "middle", "END": "end", "E": "end"}
                 phase, period = labels[match[1]], int(match[2])
             elif raw_period.isdecimal() and baseball.get("inningHalf") in ("T", "B"):
                 phase, period = ("top" if baseball["inningHalf"] == "T" else "bottom"), int(raw_period)
     stamp = utc(state.get("updatedAt"))
     return {
         "score_away_home": list(map(int, raw_score.groups())) if raw_score else None,
-        "phase": phase, "period": period, "period_text": raw_period, "outs": outs,
+        "phase": phase, "period": period, "period_text": raw_period, "outs": outs, "bases": bases,
         "source_updated_at": stamp.isoformat() if stamp else None,
     }
 
@@ -182,6 +190,9 @@ def agreement(official, market):
         return "period_mismatch"
     if all(type(s.get("outs")) is int for s in (official, market)) and official["outs"] != market["outs"]:
         return "outs_mismatch"
+    if official["phase"] in ("top", "bottom") and all(s.get("bases") is not None for s in (official, market)):
+        if official["bases"] != market["bases"]:
+            return "base_runners_mismatch"
     return "score_and_phase_agree"
 
 

@@ -293,3 +293,47 @@ Omit `--watch` for one poll or select a league with `--leagues nhl` or
 `--event nhl-wpg-bos-2026-11-25`. The verifier reads public endpoints and
 reports differences, including cases where the score agrees but a phase
 cannot be confirmed.
+
+### MLB and NHL in-game moneyline EV
+
+```powershell
+python -m src.pro_live_ev --watch --stake 2 --slippage .01
+```
+
+The runner reports both teams' win probabilities, executable limits for the
+available depth, estimated net ROI, and screened ROI after a five-point
+probability haircut. The default screen requires at least 5% screened ROI.
+The paper stake caps estimated cost, including fees and slippage. Pricing
+requires agreement between the official and Polymarket US states, an open
+moneyline with the right settlement terms, and a book at most five seconds
+old. A changed score or phase during the quote check blocks EV output. Within
+an MLB half inning, the two feeds must also agree on outs and base occupancy.
+This runner reads public data and prints paper estimates.
+
+The MLB model uses score, inning, batting side, outs and base occupancy in
+standard nine-inning games, including inning breaks. Historical within-inning
+states come from completed plate appearances. The model groups live states
+with the same score, inning, outs and runners regardless of pitch count or
+player identity. The NHL model uses score and remaining regulation time,
+including intermissions and excluding the final 60 seconds. Its outcome
+includes overtime or shootout wins where applicable. Extra innings and NHL
+overtime are outside the forecasted state coverage.
+
+| 2025 holdout | Games | States | Brier | Score-only Brier |
+|---|---:|---:|---:|---:|
+| MLB | 240 | 17,613 | 0.1584 | 0.1616 |
+| NHL | 183 | 10,797 | 0.1672 | 0.1720 |
+
+Season partitions are 2023 for training, 2024 for calibration, and 2025 for
+holdout. NHL seasons use the ending year. Three NHL season samples requested
+192 games each and 38 requests failed. Results use only games whose official
+scores and historical states could be reconstructed. Forecasts were compared
+against actual game winners. Historical executable odds were unavailable for
+this test, so realized trading ROI remains unmeasured.
+
+To rebuild the artifacts from league feeds:
+
+```sh
+python -m src.train_pro_inplay mlb --cache data/pro_live_cache
+python -m src.train_pro_inplay nhl --cache data/pro_live_cache
+```
