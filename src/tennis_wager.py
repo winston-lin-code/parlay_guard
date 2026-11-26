@@ -74,6 +74,28 @@ def live_catalog():
     raise WagerError("Live event catalog exceeds its request limit.")
 
 
+def catalog_scores(events, previous):
+    """Build paper-only scores using the catalog's title order and update timestamp."""
+    scores = {}
+    for slug, event in events.items():
+        title = str(event.get("title") or "")
+        columns = title.split(" vs. ")
+        teams = event.get("teams") or []
+        timestamp = event.get("updatedAt")
+        if (len(columns) != 2 or len(teams) != 2 or event.get("live") is not True
+                or event.get("ended") is True or not event.get("score") or not event.get("period")
+                or any(" / " in side or " - " in side for side in columns)
+                or any(name(column) not in team_names({"team": team}) for column, team in zip(columns, teams))
+                or not fresh(timestamp, SCORE_MAX_AGE)):
+            continue
+        score = {"event_slug": slug, "score_league": slug.split("-", 1)[0].upper(),
+                 "score_columns": columns, "phase": "live", "score_utc": timestamp,
+                 "score_text": event["score"], "period_text": event["period"], "source": "catalog"}
+        score["first_set_break_utc"] = observe_first_set_break(previous.get(slug, {}), score, utc)
+        scores[slug] = score
+    return scores
+
+
 def catalog_event(events, score):
     slug = score.get("event_slug")
     if slug:
@@ -221,6 +243,9 @@ def price_candidate(candidate, stake):
     slug = event["slug"]
     try:
         event = public("/v1/events/slug/" + slug)["event"]
+        if state.get("source") == "catalog" and (event.get("score") != state["score_text"]
+                                                  or event.get("period") != state["period_text"]):
+            return None
         selection = match_selection(event, state)
         if selection is None:
             return None
@@ -229,7 +254,8 @@ def price_candidate(candidate, stake):
         ticket = order_for_stake(pick, contract, long, book, stake)
         if ticket:
             payload, summary = ticket
-            return game_id, slug, state, payload, {**summary, **pick, "score": state["score_text"]}
+            return game_id, slug, state, payload, {**summary, **pick, "score": state["score_text"],
+                                                         "score_source": state.get("source", "websocket")}
     except DATA_ERRORS as exc:
         print(f"Skipped {slug}: {type(exc).__name__}", flush=True)
     return None
@@ -244,7 +270,7 @@ def run(args, exchange):
         worker = Thread(target=follow_scores, args=(stop, scores.publish), daemon=True)
         worker.start()
         heartbeat = refresh_catalog = 0
-        events = {}
+        events, paper_scores = {}, {}
         try:
             while not stop.is_set():
                 if monotonic() >= refresh_catalog:
@@ -253,22 +279,31 @@ def run(args, exchange):
                     except DATA_ERRORS as exc:
                         events = {}
                         print(f"ITF market catalog unavailable: {type(exc).__name__}", flush=True)
-                    refresh_catalog = monotonic() + 15
+                    if not exchange:
+                        paper_scores = catalog_scores(events, paper_scores)
+                    refresh_catalog = monotonic() + (15 if exchange else args.interval)
                 active = scores.active_games()
-                candidates = [(game_id, state, event) for game_id, state in active
-                              if (event := catalog_event(events, state)) is not None
-                              and not store.execute("SELECT 1 FROM tennis_orders WHERE mode=? AND event=?",
-                                                    (mode, event["slug"])).fetchone()]
+                matched = [(game_id, state, event) for game_id, state in active
+                           if (event := catalog_event(events, state)) is not None]
+                socket_events = {event["slug"] for _, _, event in matched}
+                matched.extend((slug, state, events[slug]) for slug, state in paper_scores.items()
+                               if slug not in socket_events and fresh(state["score_utc"], SCORE_MAX_AGE))
+                candidates = [(game_id, state, event) for game_id, state, event in matched
+                              if not store.execute("SELECT 1 FROM tennis_orders WHERE mode=? AND event=?",
+                                                   (mode, event["slug"])).fetchone()]
                 if monotonic() >= heartbeat:
-                    print(f"{mode.upper()} · {len(events)} ITF listings · {len(active)} fresh score streams "
-                          f"· {len(candidates)} matched and eligible for pricing", flush=True)
+                    print(f"{mode.upper()} · {len(events)} ITF listings · {len(active)} fresh WebSocket scores "
+                          f"· {len(paper_scores)} fresh paper catalog scores · {len(candidates)} queued for screening",
+                          flush=True)
                     heartbeat = monotonic() + 30
                 results = pool.map(lambda candidate: price_candidate(candidate, args.stake), candidates)
                 for result in results:
                     if not result:
                         continue
                     game_id, slug, state, payload, summary = result
-                    newest = scores.get(game_id)
+                    newest = paper_scores.get(slug, {}) if state.get("source") == "catalog" else scores.get(game_id)
+                    if exchange and state.get("source") == "catalog":
+                        continue
                     if (not fresh(state["score_utc"], SCORE_MAX_AGE)
                             or not fresh(summary["quote_utc"], BOOK_MAX_AGE)
                             or first_set_checkpoint(newest, now()) != summary["checkpoint"]

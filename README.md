@@ -185,8 +185,10 @@ python -m src.train_tennis_halftime --men atp_matches_futures_202{2,3,4,5,6}.csv
 ### Local ITF singles wager runner
 
 Install the project requirements and start in paper mode to verify your feeds.
-The runner needs both a fresh sports WebSocket score with identifiable sides
-and a matching Polymarket US ITF singles moneyline. It prices the late first
+The runner needs a fresh score with identifiable sides and a matching
+Polymarket US ITF singles moneyline. Paper mode can use catalog scores in
+title order when WebSocket scores are missing and logs their source. Real
+orders require identified WebSocket score columns. It prices the late first
 set or the first five minutes after an observed set-two transition. It requires
 the Elo-adjusted forecast, 60% minimum model probability, and +5% minimum
 screened EV using the capped limit price and estimated fees.

@@ -50,3 +50,20 @@ def test_ledger_blocks_duplicates_and_unresolved_orders(tmp_path):
         wager.submit(unavailable, store, "itfme-two", {})
     assert not wager.reserve(store, "live", "itfme-three", summary, Decimal("10"))
     store.close()
+
+
+def test_paper_catalog_scores_check_title_order_and_track_set_break():
+    from datetime import timedelta
+
+    slug = "itfwo-player1-player2"
+    start = wager.now() - timedelta(seconds=10)
+    teams = [{"name": "Player One"}, {"name": "Player Two"}]
+    first = {"slug": slug, "title": "Player One vs. Player Two", "teams": teams, "live": True,
+             "score": "5-4:40-0", "period": "S1", "updatedAt": start.isoformat()}
+    baseline = wager.catalog_scores({slug: first}, {})
+    second = {**first, "score": "6-4, 0-0:0-0", "period": "S2", "updatedAt": wager.now().isoformat()}
+    result = wager.catalog_scores({slug: second}, baseline)[slug]
+    assert result["source"] == "catalog"
+    assert result["first_set_break_utc"] == second["updatedAt"]
+    assert not wager.catalog_scores({slug: {**first, "teams": teams[::-1]}}, {})
+    assert not wager.catalog_scores({slug: {**first, "updatedAt": (start - timedelta(minutes=1)).isoformat()}}, {})
