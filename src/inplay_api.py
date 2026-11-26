@@ -16,6 +16,8 @@ from .college_ev_scan import scan_college
 from .nfl_inplay_scan import scan_nfl
 from .college_inplay_scan import scan_college_live
 from .game_board_feed import FINAL_SCORE_AGE, MAX_SCORE_AGE, follow_scores, scan_moneylines
+from .halftime_paper import screen_halftime
+from .us_wager import BOOK_MAX_AGE
 
 router = APIRouter()
 PAGE = Path(__file__).resolve().parents[1] / "static" / "inplay.html"
@@ -71,12 +73,13 @@ class ScanState:
         self.moneyline_quotes = {}
         self.scores = {}
         self.live_sports = {}
+        self.halftime = {"updated_utc": None, "picks": [], "warnings": []}
         self.college = {"updated_utc": None, "games": [], "opportunities": [], "warnings": []}
 
     def start(self):
         self.stop.clear()
         tasks = ((self.live_loop,), (self.catalog_loop,), (self.sports_loop,), (self.college_loop,),
-                 (self.board_loop,), (self.score_loop,), (self.league_live_loop, "nfl", scan_nfl),
+                 (self.board_loop,), (self.score_loop,), (self.halftime_loop,), (self.league_live_loop, "nfl", scan_nfl),
                  (self.league_live_loop, "mbb", scan_college_live, "mbb"),
                  (self.league_live_loop, "cfb", scan_college_live, "cfb"))
         for target, *args in tasks:
@@ -101,6 +104,18 @@ class ScanState:
             with self.lock:
                 self.snapshot = snapshot
             self.stop.wait(max(4, 20 - (time.monotonic() - start)))
+
+    def halftime_loop(self):
+        while not self.stop.is_set():
+            started = time.monotonic()
+            try:
+                value = screen_halftime()
+            except Exception as exc:
+                value = {"updated_utc": None, "picks": [],
+                         "warnings": [f"Halftime screen unavailable: {type(exc).__name__}"]}
+            with self.lock:
+                self.halftime = value
+            self.stop.wait(max(4, 12 - (time.monotonic() - started)))
 
     def update_catalog(self, value):
         with self.lock:
@@ -164,6 +179,7 @@ class ScanState:
             snapshot, catalog, sports = dict(self.snapshot), dict(self.catalog), dict(self.sports)
             college, live_sports = dict(self.college), list(self.live_sports.values())
             quotes, scores = dict(self.moneyline_quotes), dict(self.scores)
+            halftime = dict(self.halftime)
         now = datetime.now(timezone.utc)
         fresh, games, observations = [], [], []
         sources = (snapshot, college, *live_sports)
@@ -200,10 +216,12 @@ class ScanState:
         coverage = dict(snapshot.get("coverage", {}))
         for key in ("modeled_markets", "priced_sides"):
             coverage[key] = sum(game.get(key, 0) for game in games)
+        halftime["picks"] = [pick for pick in halftime["picks"]
+                             if -5 <= (now - utc(pick["quote_utc"])).total_seconds() <= BOOK_MAX_AGE]
         return {**snapshot, "catalog": catalog, "sports": sports, "stale": not observations,
                 "updated_utc": max(observations).isoformat() if observations else snapshot.get("updated_utc"),
                 "coverage": coverage, "games": games, "opportunities": ranked, "top_picks": picks,
-                "board": board,
+                "board": board, "halftime_paper": halftime,
                 "warnings": sorted({warning for source in sources for warning in source.get("warnings", [])}),
                 "venue": "Polymarket CLOB (international)", "supported_markets": sorted(SCORING_MARKETS)}
 
