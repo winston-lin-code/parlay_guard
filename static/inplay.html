@@ -498,9 +498,11 @@ function renderDetail(game, now) {
 function tennisModelStatus(game) {
   const model = game.tennis_projection;
   if (!model || offline) return 'Waiting for a supported tennis score';
-  const label = model.historical_prior ? 'Win estimate with trained set-break prior' : 'Score-only win estimate, even starting odds';
+  const label = model.elo_prior ? 'Elo and live score win estimate'
+    : model.historical_prior ? 'Win estimate with trained set-break prior'
+    : 'Score-only win estimate, even starting odds';
   return label + ' · ' + pct(model.first_probability) + ' / ' + pct(model.second_probability)
-    + ' (score order)';
+    + ' (score order)' + (model.checkpoint ? ' · ' + model.checkpoint : '');
 }
 
 function renderHalftimeCoverage(games, picks, modeled, league, query) {

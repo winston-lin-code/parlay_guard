@@ -26,6 +26,9 @@ def parse_score(message):
     else:
         return None
     return message["gameId"], {
+        "event_slug": str(message.get("slug") or ""),
+        "score_league": str(message.get("leagueAbbreviation") or "").upper(),
+        "score_columns": [str(message.get(side) or "") for side in ("homeTeam", "awayTeam")],
         "phase": phase, "score_text": str(message.get("score") or ""),
         "score_order": " / ".join(str(message.get(side) or "") for side in ("homeTeam", "awayTeam")).strip(" /"),
         "period_text": str(message.get("period") or "") if phase == "live" else "",

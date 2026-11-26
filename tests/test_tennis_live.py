@@ -60,3 +60,45 @@ def test_trained_priors_match_artifact_at_set_break(league):
     doubles = tennis_projection({**game, "title": "A - B vs. C - D"}, score)
     assert not doubles["historical_prior"]
     assert doubles["first_probability"] == 0.75
+
+
+def test_halftime_inventory_rows_include_live_tennis_model():
+    now = datetime.now(timezone.utc)
+    state = ScanState()
+    game = {"event": "itfme-test", "title": "One vs. Two", "phase": "live",
+            "score_text": "7-6(7-4), 0-0:0-0", "period_text": "S2"}
+    state.halftime = {"updated_utc": now.isoformat(), "picks": [], "warnings": [], "live_games": [game]}
+    row, = state.read()["halftime_paper"]["live_games"]
+    assert row["tennis_projection"]["historical_prior"]
+    assert row["tennis_projection"]["first_probability"] > .5
+    assert "tennis_projection" not in game
+
+
+def test_observed_first_set_break_expires_and_survives_score_changes():
+    from src.inplay_scan import utc
+    from src.tennis_live import first_set_checkpoint, observe_first_set_break
+
+    now = datetime.now(timezone.utc)
+    first = {"phase": "live", "period_text": "S1", "score_text": "5-4:40-0",
+             "score_utc": (now - timedelta(seconds=30)).isoformat()}
+    second = {"phase": "live", "period_text": "S2", "score_text": "6-4, 0-0:0-0", "score_utc": now.isoformat()}
+    assert first_set_checkpoint(first, now) == "Late first set · one game from set"
+    assert observe_first_set_break({}, second, utc) is None
+    second["first_set_break_utc"] = observe_first_set_break(first, second, utc)
+    assert second["first_set_break_utc"] == now.isoformat()
+    assert observe_first_set_break(second, {**second, "score_text": "6-4, 0-1:0-0"}, utc) == now.isoformat()
+    assert first_set_checkpoint(second, now + timedelta(minutes=5))
+    assert first_set_checkpoint(second, now + timedelta(minutes=5, seconds=1)) is None
+
+
+def test_elo_prior_uses_identified_score_column_order():
+    from src.tennis_live import tennis_projection
+
+    game = {"event": "itfme-test", "title": "Robert Strombachs vs. Yash Yadav"}
+    score = {"phase": "live", "period_text": "S2", "score_text": "6-4, 0-0:0-0"}
+    forward = tennis_projection(game, {**score, "score_order": "Robert Strombachs / Yash Yadav"})
+    reverse = tennis_projection(game, {**score, "score_text": "4-6, 0-0:0-0",
+                                        "score_order": "Yash Yadav / Robert Strombachs"})
+    assert forward["elo_prior"] and reverse["elo_prior"]
+    assert forward["first_probability"] == pytest.approx(reverse["second_probability"])
+    assert not tennis_projection(game, score)["elo_prior"]

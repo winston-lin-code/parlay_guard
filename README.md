@@ -135,3 +135,79 @@ Run the following with those six files in the working directory.
 python -m src.train_tennis_live --men atp_matches_futures_202{2,3,4}.csv \
   --women wta_matches_qual_itf_202{2,3,4}.csv --holdout-year 2024
 ```
+
+### ITF pre-match Elo
+
+The pre-match model rates men's and women's main-draw singles independently.
+Each player starts at 1500. It updates overall and surface Elo from completed
+matches and blends the two ratings at prediction time. The historical CSVs
+give tournament start dates. The replay waits 14 days after that date before
+applying results, and batches same-date updates so the order of the CSV rows
+does not affect predictions.
+
+The model uses 2022 for warm-up, 2023–24 to select the update rate and surface
+weight by log loss, and 2025 for a walk-forward holdout with settings fixed.
+The saved player ratings incorporate additional 2026 matches present in the
+archive. They are intended for predictions after the artifact's data cutoff.
+This model covers pre-match singles probabilities.
+
+Use the same Jeff Sackmann archive identified above, with the 2022–26 ATP
+Futures and WTA qualifying/ITF files. Train and query the model with these
+commands.
+
+```sh
+python -m src.train_tennis_elo --men atp_matches_futures_202{2,3,4,5,6}.csv \
+  --women wta_matches_qual_itf_202{2,3,4,5,6}.csv --holdout-year 2025
+python -m src.tennis_elo ITFME "Robert Strombachs" "Yash Yadav" --surface Hard
+```
+
+### ITF live Elo and first-set break
+
+The live singles estimate combines overall Elo and completed-set game
+margins when the live feed identifies both score columns and both players
+resolve to ratings. The historical set-break model supplies the fallback.
+The fit uses 2023–24 match-start ratings and scores, with 2025 held out.
+Current point and game scores adjust the estimate within a set. The holdout
+measures match start and set breaks only.
+
+The Halftime view marks a late first set using the score and marks the five
+minutes following a recently observed transition into set two. Tennis has
+no countdown to set end, so the late-set label uses score state. These
+estimates appear in the live coverage list.
+
+To refit with the same historical inputs:
+
+```sh
+python -m src.train_tennis_halftime --men atp_matches_futures_202{2,3,4,5,6}.csv \
+  --women wta_matches_qual_itf_202{2,3,4,5,6}.csv
+```
+
+### Local ITF singles wager runner
+
+Install the project requirements and start in paper mode to verify your feeds.
+The runner needs both a fresh sports WebSocket score with identifiable sides
+and a matching Polymarket US ITF singles moneyline. It prices the late first
+set or the first five minutes after an observed set-two transition. It requires
+the Elo-adjusted forecast, 60% minimum model probability, and +5% minimum
+screened EV using the capped limit price and estimated fees.
+
+```powershell
+python -m pip install -r requirements.txt
+python -m src.tennis_wager --stake 2
+```
+
+Real-order mode requires local Polymarket US credentials in
+`POLYMARKET_KEY_ID` and `POLYMARKET_SECRET_KEY` and a UTC daily exposure cap.
+The stake is a maximum all-in cost. The daily cap counts reserved exposure
+including canceled or unresolved attempts. Each order uses a limit with
+fill-or-kill, and the SQLite ledger records one attempt per event and mode.
+Use the same ledger path across restarts. The runner stops on an ambiguous
+submission response. Reconcile the exchange activity before trading again.
+
+```powershell
+python -m src.tennis_wager --live --stake 2 --daily-cap 10
+```
+
+Use Ctrl+C to stop. The default ledger is
+`data/paper_trades/tennis_orders.sqlite3`. Startup can take a few score
+updates, and a score stream with missing identities or stale data is skipped.
