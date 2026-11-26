@@ -110,3 +110,27 @@ The added basketball models use verified ESPN halftime scores and venue status.
 They were trained with 2024 and 2025 SportsDataverse schedule data and evaluated
 on 2026 games. The holdouts evaluate win probabilities. They do not establish
 trading returns for the added leagues.
+
+### Automatically record halftime paper bets
+
+From the project folder, start the local paper account:
+
+```powershell
+python -m src.paper_halftime
+```
+
+It starts with $100 of simulated cash and records a $2 paper entry the first
+time a game passes the halftime rule with a fresh quote. The log survives
+restarts and repeated scans. While the script runs, it checks Polymarket US
+settlements and records realized P&L. Press Ctrl+C to stop.
+
+```powershell
+python -m src.paper_halftime --status
+python -m src.paper_halftime --settle-only
+python -m src.paper_halftime --export-csv halftime-bets.csv
+```
+
+Use `--league NFL` to follow one league or `--db PATH` to keep a separate paper
+account. The default ledger is `data/paper_trades/halftime_account.sqlite3`.
+Paper fills use quoted order-book depth and estimated fees. The script uses
+public market data and simulated cash.
