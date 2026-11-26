@@ -13,22 +13,29 @@ from sklearn.metrics import brier_score_loss, log_loss
 from .tennis_live import ARTIFACT, _completed_set
 
 
+def completed_itf_singles(row):
+    qualifying = row["round"].startswith("Q") and row["round"] != "QF"
+    if "-ITF-" not in row["tourney_id"] or row["best_of"] != "3" or qualifying:
+        return None
+    score = row["score"]
+    if not re.fullmatch(r"\d-\d(?:\(\d+\))?(?: \d-\d(?:\(\d+\))?){1,2}", score):
+        return None
+    sets = [tuple(map(int, pair.split("(")[0].split("-"))) for pair in score.split()]
+    if any(not _completed_set(*pair) for pair in sets):
+        return None
+    margins = [a - b for a, b in sets]
+    if margins[-1] <= 0 or sum(margin > 0 for margin in margins) != 2:
+        return None
+    return margins
+
+
 def load_matches(paths):
     matches = {}
     for path in paths:
         with path.open(encoding="utf-8-sig", newline="") as file:
             for row in csv.DictReader(file):
-                qualifying = row["round"].startswith("Q") and row["round"] != "QF"
-                if "-ITF-" not in row["tourney_id"] or row["best_of"] != "3" or qualifying:
-                    continue
-                score = row["score"]
-                if not re.fullmatch(r"\d-\d(?:\(\d+\))?(?: \d-\d(?:\(\d+\))?){1,2}", score):
-                    continue
-                sets = [tuple(map(int, pair.split("(")[0].split("-"))) for pair in score.split()]
-                if any(not _completed_set(*pair) for pair in sets):
-                    continue
-                margins = [a - b for a, b in sets]
-                if margins[-1] <= 0 or sum(margin > 0 for margin in margins) != 2:
+                margins = completed_itf_singles(row)
+                if margins is None:
                     continue
                 date = row["tourney_date"]
                 key = row["tourney_id"], row["match_num"]

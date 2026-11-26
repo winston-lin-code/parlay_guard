@@ -135,3 +135,28 @@ Run the following with those six files in the working directory.
 python -m src.train_tennis_live --men atp_matches_futures_202{2,3,4}.csv \
   --women wta_matches_qual_itf_202{2,3,4}.csv --holdout-year 2024
 ```
+
+### ITF pre-match Elo
+
+The pre-match model rates men's and women's main-draw singles independently.
+Each player starts at 1500. It updates overall and surface Elo from completed
+matches and blends the two ratings at prediction time. The historical CSVs
+give tournament start dates. The replay waits 14 days after that date before
+applying results, and batches same-date updates so the order of the CSV rows
+does not affect predictions.
+
+The model uses 2022 for warm-up, 2023–24 to select the update rate and surface
+weight by log loss, and 2025 for a walk-forward holdout with settings fixed.
+The saved player ratings incorporate additional 2026 matches present in the
+archive. They are intended for predictions after the artifact's data cutoff.
+This model covers pre-match singles probabilities.
+
+Use the same Jeff Sackmann archive identified above, with the 2022–26 ATP
+Futures and WTA qualifying/ITF files. Train and query the model with these
+commands.
+
+```sh
+python -m src.train_tennis_elo --men atp_matches_futures_202{2,3,4,5,6}.csv \
+  --women wta_matches_qual_itf_202{2,3,4,5,6}.csv --holdout-year 2025
+python -m src.tennis_elo ITFME "Robert Strombachs" "Yash Yadav" --surface Hard
+```
