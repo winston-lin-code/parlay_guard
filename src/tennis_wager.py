@@ -264,15 +264,34 @@ def submit(exchange, store, slug, payload):
     return {"order_id": order_id, "state": status}
 
 
+def resolve_catalog_score(slug, listed, detail):
+    """Prefer the newest usable score while keeping event details for market checks."""
+    listed_at = utc(listed["score_utc"])
+    detail_at = utc(detail.get("updatedAt"))
+    if listed_at is None or detail_at is None or detail.get("slug") != slug:
+        return None, "catalog score timestamp or event identity missing"
+    same_score = all(detail.get(key) == listed[field]
+                     for key, field in (("score", "score_text"), ("period", "period_text")))
+    if detail_at < listed_at or (detail_at == listed_at and same_score):
+        return listed, None
+    if detail_at == listed_at:
+        return None, "catalog score sources disagree at the same timestamp"
+    refreshed = catalog_scores({slug: detail}, {slug: listed}).get(slug)
+    if not refreshed or refreshed["score_columns"] != listed["score_columns"]:
+        return None, "newer catalog score stale or unverifiable"
+    return refreshed, None
+
+
 def price_candidate(candidate, stake):
     game_id, state, event = candidate
     slug = event["slug"]
     reasons = []
     try:
         event = public("/v1/events/slug/" + slug)["event"]
-        if state.get("source") == "catalog" and (event.get("score") != state["score_text"]
-                                                  or event.get("period") != state["period_text"]):
-            return None, "catalog score changed before pricing"
+        if state.get("source") == "catalog":
+            state, reason = resolve_catalog_score(slug, state, event)
+            if reason:
+                return None, reason
         selection = match_selection(event, state, reasons.append)
         if selection is None:
             return None, reasons[-1]
@@ -334,9 +353,13 @@ def run(args, exchange):
                         skipped[reason] += 1
                         continue
                     game_id, slug, state, payload, summary = result
-                    newest = paper_scores.get(slug, {}) if state.get("source") == "catalog" else scores.get(game_id)
-                    if exchange and state.get("source") == "catalog":
-                        continue
+                    if state.get("source") == "catalog":
+                        if exchange:
+                            continue
+                        # Catalog polling runs on this thread. Pricing may have refreshed the score.
+                        newest = state
+                    else:
+                        newest = scores.get(game_id)
                     if (not fresh(state["score_utc"], SCORE_MAX_AGE)
                             or not fresh(summary["quote_utc"], BOOK_MAX_AGE)
                             or first_set_checkpoint(newest, now()) != summary["checkpoint"]

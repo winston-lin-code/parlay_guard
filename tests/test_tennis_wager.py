@@ -67,3 +67,29 @@ def test_paper_catalog_scores_check_title_order_and_track_set_break():
     assert result["first_set_break_utc"] == second["updatedAt"]
     assert not wager.catalog_scores({slug: {**first, "teams": teams[::-1]}}, {})
     assert not wager.catalog_scores({slug: {**first, "updatedAt": (start - timedelta(minutes=1)).isoformat()}}, {})
+
+
+def test_pricing_uses_newer_catalog_score_and_preserves_transition(monkeypatch):
+    from datetime import timedelta
+
+    slug = "itfme-strombachs-yadav"
+    now = wager.now()
+    teams = [{"name": "Robert Strombachs"}, {"name": "Yash Yadav"}]
+    first = {"slug": slug, "title": "Robert Strombachs vs. Yash Yadav", "teams": teams, "live": True,
+             "score": "5-4:40-0", "period": "S1", "updatedAt": (now - timedelta(seconds=5)).isoformat()}
+    listed = wager.catalog_scores({slug: first}, {})[slug]
+    second = {**first, "score": "6-4, 0-0:0-0", "period": "S2", "updatedAt": now.isoformat()}
+    newest, reason = wager.resolve_catalog_score(slug, listed, second)
+    assert reason is None
+    assert newest["first_set_break_utc"] == second["updatedAt"]
+    assert wager.resolve_catalog_score(slug, newest, first) == (newest, None)
+    assert wager.resolve_catalog_score(slug, listed, {**second, "updatedAt": first["updatedAt"]})[0] is None
+
+    monkeypatch.setattr(wager, "public", lambda path: {"event": second})
+
+    def capture(event, state, report):
+        assert state == newest
+        report("observed newer score")
+
+    monkeypatch.setattr(wager, "match_selection", capture)
+    assert wager.price_candidate((slug, listed, first), Decimal("2")) == (None, "observed newer score")
