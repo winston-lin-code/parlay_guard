@@ -1,6 +1,7 @@
 """Read-only Polymarket US screen for the halftime moneyline paper rule."""
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import re
@@ -153,7 +154,17 @@ def paper_quote(book, slug, long, now):
     return None
 
 
-def price_game(game):
+@dataclass(frozen=True)
+class HalftimeSelection:
+    event: str
+    market: str
+    long: bool
+    side: str
+    probability: float
+    url: str
+
+
+def prepare_selection(game):
     probability = home_probability(game, datetime.now(timezone.utc))
     if not MIN_PROBABILITY <= probability <= 1 and not 0 <= probability <= 1 - MIN_PROBABILITY:
         return None
@@ -167,22 +178,34 @@ def price_game(game):
     side = next(side for side in market["marketSides"] if side["long"] is long)
     if side.get("tradable") is not True:
         return None
-    book = public(f"/v1/markets/{market['slug']}/book", fresh_book=True)["marketData"]
-    quote = paper_quote(book, market["slug"], long, datetime.now(timezone.utc))
+    return HalftimeSelection(event["slug"], market["slug"], long, game["teams"][selected]["shortDisplayName"],
+                             p, contract_url(event, market, long))
+
+
+def price_selection(game, selection):
+    book = public(f"/v1/markets/{selection.market}/book", fresh_book=True)["marketData"]
+    quote = paper_quote(book, selection.market, selection.long, datetime.now(timezone.utc))
     if quote is None:
         return None
-    screened_ev = (p - PROBABILITY_HAIRCUT) / quote["cost"] - 1
+    screened_ev = (selection.probability - PROBABILITY_HAIRCUT) / quote["cost"] - 1
     if screened_ev < MIN_SCREENED_EV:
         return None
     away, home = (game["teams"][key] for key in ("away", "home"))
-    return {**quote, "event": event["slug"], "league": game["league"],
+    return {**quote, "event": selection.event, "league": game["league"],
             "title": f"{away['shortDisplayName']} @ {home['shortDisplayName']}",
             "score_text": f"{away['abbreviation']} {game['scores']['away']} · {home['abbreviation']} {game['scores']['home']}",
-            "side": game["teams"][selected]["shortDisplayName"], "probability": p,
-            "screened_ev": screened_ev, "url": contract_url(event, market, long)}
+            "side": selection.side, "probability": selection.probability,
+            "screened_ev": screened_ev, "url": selection.url}
 
 
-def screen_halftime():
+def price_game(game):
+    selection = prepare_selection(game)
+    return price_selection(game, selection) if selection is not None else None
+
+
+def screen_halftime(*, leagues=LEAGUES, score_feed=None, price_feed=None):
+    score_feed = score_feed or scores
+    price_feed = price_feed or price_game
     started = datetime.now(timezone.utc)
     day = started.astimezone(ET).date()
     days = (day - timedelta(days=1), day) if started.astimezone(ET).hour < 6 else (day,)
@@ -190,7 +213,7 @@ def screen_halftime():
 
     def fetch(league, date):
         try:
-            return {game["id"]: game for event in scores(league, date)
+            return {game["id"]: game for event in score_feed(league, date)
                     if (game := game_state(league, event)) is not None}
         except FEED_ERRORS:
             warnings.add(f"{league} halftime scoreboard unavailable")
@@ -198,13 +221,13 @@ def screen_halftime():
 
     def price(game):
         try:
-            return price_game(game)
+            return price_feed(game)
         except FEED_ERRORS:
             warnings.add(f"{game['league']} halftime pricing partially unavailable")
             return None
 
     with ThreadPoolExecutor(max_workers=6) as pool:
-        keys = [(league, date) for league in LEAGUES for date in days]
+        keys = [(league, date) for league in leagues for date in days]
         slates = list(pool.map(lambda key: fetch(*key), keys))
         games = {key: game for slate in slates for key, game in slate.items()}
         picks = dict(zip(games, pool.map(price, games.values())))
