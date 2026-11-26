@@ -274,3 +274,22 @@ provider. Scores already visible at startup are excluded from the lead
 calculation. The comparison measures feed arrival, and the time of the
 point on court remains unknown. The probe leaves the wagering runner's
 score source untouched.
+
+### MLB and NHL live score verification
+
+Compare live Polymarket US listings with MLB Stats API and NHL Gamecenter
+data. The verifier matches the two teams and scheduled start, then reports
+score and phase agreement. MLB adds inning half, outs, and the last completed
+play timestamp. NHL adds period, clock, and intermission status. Source and
+receipt timestamps are shown together when supplied. NHL public scoreboard
+responses give the game clock, so the official wall-clock age is unknown.
+
+```powershell
+python -m src.pro_live_scores --watch
+```
+
+Omit `--watch` for one poll or select a league with `--leagues nhl` or
+`--leagues mlb`. To verify a particular past listing, use
+`--event nhl-wpg-bos-2026-11-25`. The verifier reads public endpoints and
+reports differences, including cases where the score agrees but a phase
+cannot be confirmed.
