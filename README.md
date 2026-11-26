@@ -214,17 +214,19 @@ updates, and a score stream with missing identities or stale data is skipped.
 
 #### Streamed score-based paper mode
 
-Choose one ITF singles event. Copy its event slug from the Polymarket US
-listing. Start the runner before the match to connect the full order book in
-advance. In your local, git-ignored `.env` file set `POLYMARKET_US_KEY_ID`
+The runner discovers live ITF men's and women's singles on Polymarket US
+and looks up upcoming matches every 15 seconds, starting book subscriptions
+up to 15 minutes before their scheduled starts. In your local, git-ignored
+`.env` file set `POLYMARKET_US_KEY_ID`
 and `POLYMARKET_US_SECRET_KEY` for the read-only book subscription. On Windows
 install `tzdata` if the Eastern time zone is unavailable.
 
 ```powershell
 python -m pip install -r requirements.txt cryptography tzdata
-python -m src.tennis_wager --stream-event YOUR_ITF_EVENT_SLUG --env-file .env --stake 2 --db data/paper_trades/tennis_stream.sqlite3
+python -m src.tennis_wager --stream-all --env-file .env --stake 2 --db data/paper_trades/tennis_stream.sqlite3
 ```
 
+`--stream-event YOUR_ITF_EVENT_SLUG` selects a single match when needed.
 The runner evaluates any supported point score and wakes up on score and
 book updates. A paper entry uses an open full book received after the score
 and an exchange book timestamp at most three seconds old. It skips scores
