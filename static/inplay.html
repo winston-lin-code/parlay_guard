@@ -288,10 +288,14 @@ function currentGames(now) {
   }
   for (const game of snapshot.board || []) {
     if (!games.has(game.event)) continue;
-    const {moneyline_quotes, ...score} = game;
+    const {moneyline_quotes, tennis_projection, ...score} = game;
     add({event: game.event, odds: moneyline_quotes});
     const scoreAge = age(score.score_utc, now);
-    if (scoreAge >= -5000 && (score.phase === 'final' || scoreAge <= 180000)) add(score);
+    if (scoreAge >= -5000 && (score.phase === 'final' || scoreAge <= 180000)) {
+      add({...score, tennis_projection});
+    } else if (!score.score_utc && games.get(game.event).phase === 'live') {
+      add({event: game.event, tennis_projection});
+    }
   }
   // The NBA model snapshot is also a scoreboard feed. Honor newer confirmed state and
   // never restore a pregame view over a live/final game supplied by the board.
@@ -317,7 +321,7 @@ function currentGames(now) {
 
 const HALFTIME_LABELS = {
   NBA:'NBA', NFL:'NFL', CBB:'Men’s college basketball', WCBB:'Women’s college basketball',
-  CFB:'FBS college football', WNBA:'WNBA',
+  CFB:'FBS college football', WNBA:'WNBA', ITFME:'ITF Men', ITFWO:'ITF Women',
 };
 
 function halftimeLeague(game) {
@@ -490,6 +494,14 @@ function renderDetail(game, now) {
   }
 }
 
+function tennisModelStatus(game) {
+  const model = game.tennis_projection;
+  if (!model || offline) return 'Waiting for a supported tennis score';
+  return 'Score-only win estimate, even starting odds · '
+    + pct(model.first_probability) + ' / ' + pct(model.second_probability)
+    + ' (score order)';
+}
+
 function renderHalftimeCoverage(games, picks, modeled, league, query) {
   const qualifying = new Set(picks.map(pick => pick.event));
   const titles = new Set(picks.map(pick => pick.title));
@@ -499,7 +511,8 @@ function renderHalftimeCoverage(games, picks, modeled, league, query) {
     .map(game => {
       const code = halftimeLeague(game);
       return [game.title, HALFTIME_LABELS[code] || code, game.score_text, game.period_text,
-        modeled.includes(code) ? 'No current qualifying quote' : 'Halftime model unavailable'];
+        ['ITFME', 'ITFWO'].includes(code) ? tennisModelStatus(game)
+          : modeled.includes(code) ? 'No current qualifying quote' : 'Halftime model unavailable'];
     }).sort((a, b) => a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]));
   const key = JSON.stringify(rows);
   if (key === halftimeCoverageFingerprint) return;
@@ -527,6 +540,7 @@ function renderHalftime(now, league, query, games) {
   text('halftime-count', picks.length + ' qualifying');
   const warning = offline ? 'Connection interrupted. Waiting for fresh quotes.' : scan?.warnings?.join(' · ');
   const status = warning || (!current ? 'Waiting for the halftime scan'
+    : ['ITFME', 'ITFWO'].includes(league) ? ''
     : league && !modeled.includes(league) ? 'A halftime model is unavailable for this league.'
     : !picks.length ? 'No fresh halftime moneylines match the rule and your filters.' : '');
   $('halftime-status').hidden = !status;

@@ -17,6 +17,7 @@ from .nfl_inplay_scan import scan_nfl
 from .college_inplay_scan import scan_college_live
 from .game_board_feed import FINAL_SCORE_AGE, MAX_SCORE_AGE, follow_scores, scan_moneylines
 from .halftime_paper import LEAGUES as HALFTIME_LEAGUES, screen_halftime
+from .tennis_live import tennis_projection
 from .us_wager import BOOK_MAX_AGE
 
 router = APIRouter()
@@ -192,6 +193,8 @@ class ScanState:
             fresh.extend(source["opportunities"])
         board = []
         score_states = {}
+        catalog_at = utc(sports.get("observed_utc"))
+        catalog_is_fresh = catalog_at is not None and -5 <= (now - catalog_at).total_seconds() <= MAX_SCORE_AGE.total_seconds()
         for game in sports.get("games", []):
             event = game["event"]
             state = {}
@@ -204,8 +207,9 @@ class ScanState:
             prices = [] if state.get("phase") == "final" else [
                 row for row in quotes.get(event, []) if -5 <= (now - utc(row["quote_utc"])).total_seconds() <= MAX_AGE
             ]
-            if state or prices:
-                board.append({"event": event, "moneyline_quotes": prices, **state})
+            tennis = tennis_projection(game, state or (game if catalog_is_fresh else {}))
+            if state or prices or tennis:
+                board.append({"event": event, "moneyline_quotes": prices, "tennis_projection": tennis, **state})
         # A confirmed live/final transition invalidates stale pregame EV immediately.
         times = {game["event"]: utc(game["state_observed_utc"]) for game in games}
         fresh = [row for row in fresh if agrees_with_board(
