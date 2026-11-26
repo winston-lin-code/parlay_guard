@@ -314,6 +314,16 @@ When there are no live listings, the runner shows the next scheduled start
 in Eastern time when available. Watch mode reports an unchanged idle status
 once a minute and continues checking for newly live listings between updates.
 
+Use `--paper-halftime` to log at most one simulated moneyline entry per
+game at the end of MLB's fifth inning or NHL's second intermission. This
+mode requires a modeled win probability strictly above 60% and a screened
+ROI strictly between 0% and 5%. Its default stake cap is $10. It writes
+qualifying entries to `data/paper_trades/pro_halftime.sqlite3`.
+
+```powershell
+python -m src.pro_live_ev --watch --paper-halftime --stake 10 --slippage .01
+```
+
 The MLB model uses score, inning, batting side, outs and base occupancy in
 standard nine-inning games, including inning breaks. Historical within-inning
 states come from completed plate appearances. The model groups live states

@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import sqlite3
 
 import pytest
 
@@ -86,3 +87,40 @@ def test_idle_scan_reports_next_market_in_eastern_time(monkeypatch):
     assert not ev.should_report(result, result, 59)
     assert ev.should_report(result, result, 60)
     assert ev.should_report({"league": "nhl", "games": [SLUG]}, result, 1)
+
+
+def test_halftime_paper_logs_one_qualifying_bet_per_game(tmp_path, monkeypatch):
+    monkeypatch.setattr(ev, "now", lambda: NOW)
+    path = tmp_path / "paper.sqlite3"
+    quote = {"probability": .65, "screened_ev": .03, "total_estimate": "9.75",
+             "quote_utc": (NOW - timedelta(seconds=1)).isoformat()}
+    official = {"score_away_home": [1, 3], "phase": "intermission", "period": 2}
+    game = {"event": SLUG, "league": "nhl", "official_game_id": 1, "pricing_status": "priced",
+            "official": official, "quotes": {"home": quote}}
+    for invalid in ({"probability": .60}, {"screened_ev": 0}, {"screened_ev": .05},
+                    {"total_estimate": "10.01"}):
+        result = ev.log_paper_entry(path, {**game, "quotes": {"home": {**quote, **invalid}}}, Decimal(10))
+        assert result["status"] == "outside_probability_or_roi_band"
+    assert ev.log_paper_entry(path, {**game, "official": {**official, "period": 1}}, Decimal(10))[
+        "status"
+    ] == "no_verified_halftime_quote"
+    stale = {**quote, "quote_utc": (NOW - timedelta(seconds=6)).isoformat()}
+    assert ev.log_paper_entry(path, {**game, "quotes": {"home": stale}}, Decimal(10))[
+        "status"
+    ] == "quote_expired_before_paper_entry"
+    assert not path.exists()
+
+    result = ev.log_paper_entry(path, game, Decimal(10))
+    assert result["status"] == "paper_entry_logged"
+    assert result["entry"]["outcome"] == "home"
+    assert ev.log_paper_entry(path, game, Decimal(10))["status"] == "already_logged"
+    assert ev.log_paper_entry(path, {**game, "event": f"{SLUG}-rescheduled"}, Decimal(10))[
+        "status"
+    ] == "already_logged"
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT count(*) FROM pro_halftime_entries").fetchone() == (1,)
+
+
+def test_mlb_halftime_uses_end_of_fifth():
+    assert ev.at_halftime("mlb", {"phase": "end", "period": 5})
+    assert not ev.at_halftime("mlb", {"phase": "middle", "period": 5})
