@@ -497,8 +497,8 @@ function renderDetail(game, now) {
 function tennisModelStatus(game) {
   const model = game.tennis_projection;
   if (!model || offline) return 'Waiting for a supported tennis score';
-  return 'Score-only win estimate, even starting odds · '
-    + pct(model.first_probability) + ' / ' + pct(model.second_probability)
+  const label = model.historical_prior ? 'Win estimate with trained set-break prior' : 'Score-only win estimate, even starting odds';
+  return label + ' · ' + pct(model.first_probability) + ' / ' + pct(model.second_probability)
     + ' (score order)';
 }
 

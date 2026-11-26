@@ -110,3 +110,23 @@ The added basketball models use verified ESPN halftime scores and venue status.
 They were trained with 2024 and 2025 SportsDataverse schedule data and evaluated
 on 2026 games. The holdouts evaluate win probabilities. They do not establish
 trading returns for the added leagues.
+
+### ITF singles set-break models
+
+The live board uses separate men's and women's fits based on completed-set game
+margins. The models use 2022–23 main-draw singles results, with 2024 held out.
+The artifact records Brier score and log loss against the score-only baseline
+after each completed set. Within-set updates use the live score rules with an
+odds adjustment from the most recent trained set break. The holdout measures
+set-break accuracy only. First sets and doubles display score-only estimates.
+
+The inputs are Jeff Sackmann's ATP Futures and WTA qualifying/ITF CSVs, as
+preserved in the [archived dataset](https://github.com/micahp/tennis-point-by-point-archive/tree/83733587353df8a41f2fd4f516147d5aa83f5a8d)
+under CC BY-NC-SA 4.0. Download the 2022–24 files
+`atp/atp_matches_futures_YEAR.csv` and `wta/wta_matches_qual_itf_YEAR.csv`.
+Run the following with those six files in the working directory.
+
+```sh
+python -m src.train_tennis_live --men atp_matches_futures_202{2,3,4}.csv \
+  --women wta_matches_qual_itf_202{2,3,4}.csv --holdout-year 2024
+```
