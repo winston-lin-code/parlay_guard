@@ -31,12 +31,32 @@ def test_scanner_projects_fresh_itf_catalog_and_socket_scores():
         "event": "itfwo-test", "league": "ITFWO", "title": "One vs. Two",
         "phase": "live", "score_text": "6-3, 0-0", "period_text": "S2", "sports_game_id": 42,
     }]}
-    assert state.read()["board"][0]["tennis_projection"]["first_probability"] == 0.75
+    assert state.read()["board"][0]["tennis_projection"]["first_probability"] > 0.75
     state.sports["observed_utc"] = (now - timedelta(minutes=4)).isoformat()
     assert state.read()["board"] == []
 
     update = {"gameId": 42, "live": True, "score": "3-6, 0-0:0-0", "period": "S2"}
     state.update_score(*parse_score(update))
-    assert state.read()["board"][0]["tennis_projection"]["first_probability"] == 0.25
+    assert state.read()["board"][0]["tennis_projection"]["first_probability"] < 0.25
     state.update_score(*parse_score({**update, "ended": True}))
     assert state.read()["board"][0]["tennis_projection"] is None
+
+
+@pytest.mark.parametrize("league", ("ITFME", "ITFWO"))
+def test_trained_priors_match_artifact_at_set_break(league):
+    from math import exp
+
+    from src.tennis_live import load_models, tennis_projection
+
+    model = load_models()[league]
+    game = {"event": f"{league.lower()}-test", "title": "One vs. Two"}
+    score = {"phase": "live", "score_text": "6-2, 0-0:0-0", "period_text": "S2"}
+    result = tennis_projection(game, score)
+    weight = model["set_breaks"]["1"]["weights"][0]
+    assert result["historical_prior"]
+    assert result["first_probability"] == pytest.approx(1 / (1 + exp(-4 * weight)))
+    reverse = tennis_projection(game, {**score, "score_text": "2-6, 0-0:0-0"})
+    assert reverse["first_probability"] == pytest.approx(result["second_probability"])
+    doubles = tennis_projection({**game, "title": "A - B vs. C - D"}, score)
+    assert not doubles["historical_prior"]
+    assert doubles["first_probability"] == 0.75

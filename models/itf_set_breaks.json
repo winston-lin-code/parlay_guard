@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "tours": {
+    "ITFME": {
+      "training_years": [
+        2022,
+        2023
+      ],
+      "holdout_year": 2024,
+      "set_breaks": {
+        "1": {
+          "weights": [
+            0.5687248619244614
+          ],
+          "training_matches": 32265,
+          "holdout_matches": 17551,
+          "brier": 0.131989,
+          "baseline_brier": 0.139048,
+          "log_loss": 0.432957,
+          "baseline_log_loss": 0.455876
+        },
+        "2": {
+          "weights": [
+            0.091004374297136,
+            0.12859716205269525
+          ],
+          "training_matches": 9204,
+          "holdout_matches": 5038,
+          "brier": 0.247483,
+          "baseline_brier": 0.25,
+          "log_loss": 0.688093,
+          "baseline_log_loss": 0.693147
+        }
+      }
+    },
+    "ITFWO": {
+      "training_years": [
+        2022,
+        2023
+      ],
+      "holdout_year": 2024,
+      "set_breaks": {
+        "1": {
+          "weights": [
+            0.5342393110809424
+          ],
+          "training_matches": 33143,
+          "holdout_matches": 17992,
+          "brier": 0.134486,
+          "baseline_brier": 0.14198,
+          "log_loss": 0.437908,
+          "baseline_log_loss": 0.462317
+        },
+        "2": {
+          "weights": [
+            0.10248835478654188,
+            0.1440526832510228
+          ],
+          "training_matches": 9439,
+          "holdout_matches": 5253,
+          "brier": 0.245872,
+          "baseline_brier": 0.25,
+          "log_loss": 0.684818,
+          "baseline_log_loss": 0.693147
+        }
+      }
+    }
+  }
+}

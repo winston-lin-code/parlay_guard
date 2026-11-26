@@ -1,8 +1,12 @@
 """Score-only win probabilities for ITF matches with evenly matched sides."""
 
+import json
+import math
 import re
 from functools import lru_cache
+from pathlib import Path
 
+ARTIFACT = Path(__file__).resolve().parents[1] / "models" / "itf_set_breaks.json"
 ITF_LEAGUES = {"ITFME", "ITFWO"}
 SET_SCORE = re.compile(r"(\d{1,2})\s*-\s*(\d{1,2})")
 POINTS = {"0": 0, "15": 1, "30": 2, "40": 3, "AD": 4}
@@ -32,7 +36,7 @@ def _completed_set(first, second):
     return (high == 6 and low <= 4) or (high == 7 and low in (5, 6))
 
 
-def live_win_probability(score, period, *, doubles=False):
+def live_win_probability(score, period, *, doubles=False, model=None):
     """Return the first score column's probability, or None for unsupported states."""
     stage = re.fullmatch(r"(S|TB)([1-3])", period.strip().upper())
     if stage is None:
@@ -88,10 +92,30 @@ def live_win_probability(score, period, *, doubles=False):
             win_set = win_game * _set(first + 1, second) + (1 - win_game) * _set(first, second + 1)
 
     if sets_first > sets_second:
-        return (1 + win_set) / 2
-    if sets_first < sets_second:
-        return win_set / 2
-    return win_set
+        score_probability = (1 + win_set) / 2
+    elif sets_first < sets_second:
+        score_probability = win_set / 2
+    else:
+        score_probability = win_set
+
+    stage_model = model.get("set_breaks", {}).get(str(len(completed))) if model else None
+    if not stage_model or not 0 < score_probability < 1:
+        return score_probability
+    margins = [a - b for a, b in completed]
+    fitted_log_odds = sum(weight * margin for weight, margin in zip(stage_model["weights"], margins))
+    boundary_log_odds = math.log(3) * (sets_first - sets_second)
+    # Apply the historical shift in log odds to the live scoring baseline.
+    adjusted_odds = score_probability / (1 - score_probability) * math.exp(fitted_log_odds - boundary_log_odds)
+    return adjusted_odds / (1 + adjusted_odds)
+
+
+@lru_cache(maxsize=1)
+def load_models():
+    try:
+        artifact = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+        return artifact["tours"] if artifact["version"] == 1 else {}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
 
 
 def tennis_projection(game, score):
@@ -101,7 +125,11 @@ def tennis_projection(game, score):
         return None
     sides = game.get("title", "").split(" vs. ", 1)
     doubles = len(sides) == 2 and all(" - " in side for side in sides)
-    probability = live_win_probability(score.get("score_text", ""), score.get("period_text", ""), doubles=doubles)
+    code = prefix if prefix in ITF_LEAGUES else league
+    model = load_models().get(code) if len(sides) == 2 and not doubles else None
+    period = score.get("period_text", "")
+    probability = live_win_probability(score.get("score_text", ""), period, doubles=doubles, model=model)
     if probability is None:
         return None
-    return {"first_probability": probability, "second_probability": 1 - probability}
+    return {"first_probability": probability, "second_probability": 1 - probability,
+            "historical_prior": bool(model and period.strip()[-1:] in ("2", "3"))}
