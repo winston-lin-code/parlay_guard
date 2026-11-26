@@ -16,7 +16,7 @@ from .college_ev_scan import scan_college
 from .nfl_inplay_scan import scan_nfl
 from .college_inplay_scan import scan_college_live
 from .game_board_feed import FINAL_SCORE_AGE, MAX_SCORE_AGE, follow_scores, scan_moneylines
-from .halftime_paper import screen_halftime
+from .halftime_paper import LEAGUES as HALFTIME_LEAGUES, screen_halftime
 from .us_wager import BOOK_MAX_AGE
 
 router = APIRouter()
@@ -73,7 +73,7 @@ class ScanState:
         self.moneyline_quotes = {}
         self.scores = {}
         self.live_sports = {}
-        self.halftime = {"updated_utc": None, "picks": [], "warnings": []}
+        self.halftime = {"updated_utc": None, "leagues": list(HALFTIME_LEAGUES), "picks": [], "warnings": []}
         self.college = {"updated_utc": None, "games": [], "opportunities": [], "warnings": []}
 
     def start(self):
@@ -111,7 +111,7 @@ class ScanState:
             try:
                 value = screen_halftime()
             except Exception as exc:
-                value = {"updated_utc": None, "picks": [],
+                value = {"updated_utc": None, "leagues": list(HALFTIME_LEAGUES), "picks": [],
                          "warnings": [f"Halftime screen unavailable: {type(exc).__name__}"]}
             with self.lock:
                 self.halftime = value

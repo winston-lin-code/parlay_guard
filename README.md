@@ -97,3 +97,16 @@ Prices are fractions of $1 (`0.55` means 55¢). The scanner outputs model probab
 3. Add automated market-data ingestion with market-ID mapping and price timestamps.
 4. Add walk-forward evaluation and paper-trading logs including fees and slippage.
 5. Expose predictions through a FastAPI backend and a simple frontend.
+
+## Halftime rule
+
+The Live EV Scanner's **Halftime rule** tab ranks regular-season full-game
+moneylines in NBA, NFL, FBS football, men's and women's Division I college
+basketball, and WNBA. It shows one qualifying side per game using a $2 paper
+stake, 60% minimum model probability and +5% minimum screened EV. Other live
+games remain visible with their model status.
+
+The added basketball models use verified ESPN halftime scores and venue status.
+They were trained with 2024 and 2025 SportsDataverse schedule data and evaluated
+on 2026 games. The holdouts evaluate win probabilities. They do not establish
+trading returns for the added leagues.
