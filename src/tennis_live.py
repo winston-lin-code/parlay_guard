@@ -14,6 +14,7 @@ ELO_BREAK_ARTIFACT = ARTIFACT.with_name("itf_elo_set_breaks.json")
 ITF_LEAGUES = {"ITFME", "ITFWO"}
 SET_SCORE = re.compile(r"(\d{1,2})\s*-\s*(\d{1,2})")
 BREAK_WINDOW = timedelta(minutes=5)
+BREAK_OBSERVATION_MAX_GAP = timedelta(seconds=60)
 POINTS = {"0": 0, "15": 1, "30": 2, "40": 3, "AD": 4}
 
 
@@ -155,7 +156,7 @@ def rating_gap(players, sides, score_order):
     return (first["overall"] - second["overall"]) / 400
 
 
-def observe_first_set_break(previous, current, parse_time):
+def observe_first_set_break(previous, current, parse_time, *, allow_missed_opening=False):
     old_period, period = (state.get("period_text", "").strip().upper() for state in (previous, current))
     if period not in ("S2", "TB2") or current.get("phase") != "live":
         return None
@@ -163,12 +164,18 @@ def observe_first_set_break(previous, current, parse_time):
         return previous.get("first_set_break_utc")
     if old_period not in ("S1", "TB1") or previous.get("phase") != "live":
         return None
-    games = current.get("score_text", "").split(",")
-    if len(games) != 2 or games[1].strip() not in ("0-0", "0-0:0-0"):
+    sets = current.get("score_text", "").split(",")
+    if len(sets) != 2:
+        return None
+    score = sets[1].strip()
+    opening = score in ("0-0", "0-0:0-0")
+    early = re.fullmatch(r"(?:0-0|1-0|0-1)(?::(?:0|15|30|40|AD)-(?:0|15|30|40|AD))?", score)
+    if not opening and not (allow_missed_opening and period == "S2" and early):
         return None
     old_time, time = (parse_time(state.get("score_utc")) for state in (previous, current))
-    if old_time and time and timedelta(0) < time - old_time <= timedelta(seconds=60):
-        return time.isoformat()
+    if old_time and time and timedelta(0) < time - old_time <= BREAK_OBSERVATION_MAX_GAP:
+        # When the opening update was missed, start at the earlier bound on the break.
+        return (time if opening else old_time).isoformat()
     return None
 
 

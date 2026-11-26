@@ -93,3 +93,21 @@ def test_pricing_uses_newer_catalog_score_and_preserves_transition(monkeypatch):
 
     monkeypatch.setattr(wager, "match_selection", capture)
     assert wager.price_candidate((slug, listed, first), Decimal("2")) == (None, "observed newer score")
+
+
+def test_catalog_recognizes_missed_opening_only_with_recent_set_one_score():
+    from datetime import timedelta
+
+    slug = "itfwo-player1-player2"
+    now = wager.now()
+    first = {"slug": slug, "title": "Player One vs. Player Two",
+             "teams": [{"name": "Player One"}, {"name": "Player Two"}], "live": True,
+             "score": "5-4:40-0", "period": "S1", "updatedAt": (now - timedelta(seconds=10)).isoformat()}
+    previous = wager.catalog_scores({slug: first}, {})
+    second = {**first, "score": "6-4, 1-0:15-0", "period": "S2", "updatedAt": now.isoformat()}
+    assert wager.catalog_scores({slug: second}, previous)[slug]["first_set_break_utc"] == first["updatedAt"]
+    assert wager.catalog_scores({slug: second}, {})[slug]["first_set_break_utc"] is None
+    late = {**second, "score": "6-4, 2-0:0-0"}
+    assert wager.catalog_scores({slug: late}, previous)[slug]["first_set_break_utc"] is None
+    old = {slug: {**previous[slug], "score_utc": (now - timedelta(seconds=61)).isoformat()}}
+    assert wager.catalog_scores({slug: second}, old)[slug]["first_set_break_utc"] is None

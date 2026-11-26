@@ -19,7 +19,7 @@ from .game_board_feed import follow_scores
 from .halftime_paper import MIN_PROBABILITY, MIN_SCREENED_EV, PAPER_STAKE
 from .inplay_scan import utc
 from .tennis_live import (
-    ITF_LEAGUES, first_set_checkpoint, load_elo_break_models, observe_first_set_break, tennis_projection,
+    BREAK_OBSERVATION_MAX_GAP, ITF_LEAGUES, first_set_checkpoint, load_elo_break_models, observe_first_set_break, tennis_projection,
 )
 from .us_wager import BOOK_MAX_AGE, CENT, SLUG, WagerError, decimal, name, public, quote_order, team_names
 
@@ -92,7 +92,8 @@ def catalog_scores(events, previous):
         score = {"event_slug": slug, "score_league": slug.split("-", 1)[0].upper(),
                  "score_columns": columns, "phase": "live", "score_utc": timestamp,
                  "score_text": event["score"], "period_text": event["period"], "source": "catalog"}
-        score["first_set_break_utc"] = observe_first_set_break(previous.get(slug, {}), score, utc)
+        score["first_set_break_utc"] = observe_first_set_break(
+            previous.get(slug, {}), score, utc, allow_missed_opening=True)
         scores[slug] = score
     return scores
 
@@ -165,7 +166,10 @@ def match_selection(event, score, report=lambda reason: None):
         report("unsupported score format")
         return None
     if not projection["checkpoint"]:
-        report("outside first-set-break window")
+        if score["period_text"].strip().upper() in ("S2", "TB2") and not score.get("first_set_break_utc"):
+            report("set-two transition not observed")
+        else:
+            report("outside first-set-break window")
         return None
     if not projection["elo_prior"]:
         report("one or both Elo ratings unavailable")
@@ -316,7 +320,7 @@ def run(args, exchange):
         worker = Thread(target=follow_scores, args=(stop, scores.publish), daemon=True)
         worker.start()
         heartbeat = refresh_catalog = 0
-        events, paper_scores = {}, {}
+        events, paper_scores, paper_history = {}, {}, {}
         skipped = Counter()
         try:
             while not stop.is_set():
@@ -327,7 +331,11 @@ def run(args, exchange):
                         events = {}
                         print(f"ITF market catalog unavailable: {type(exc).__name__}", flush=True)
                     if not exchange:
-                        paper_scores = catalog_scores(events, paper_scores)
+                        paper_scores = catalog_scores(events, paper_history)
+                        paper_history = {
+                            slug: score for slug, score in {**paper_history, **paper_scores}.items()
+                            if fresh(score["score_utc"], BREAK_OBSERVATION_MAX_GAP.total_seconds())
+                        }
                     refresh_catalog = monotonic() + (15 if exchange else args.interval)
                 active = scores.active_games()
                 matched = [(game_id, state, event) for game_id, state in active
