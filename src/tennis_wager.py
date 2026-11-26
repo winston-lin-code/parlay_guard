@@ -13,16 +13,21 @@ from threading import Event, Lock, Thread
 from time import monotonic
 
 import requests
+from websockets.exceptions import InvalidStatus, WebSocketException
+from websockets.sync.client import connect
 
 from .game_board_feed import follow_scores
 from .halftime_paper import MIN_PROBABILITY, MIN_SCREENED_EV, PAPER_STAKE
 from .inplay_scan import utc
+from .pregame_capture import MARKETS_WS, auth_headers, get_credentials
 from .tennis_live import (
-    ITF_LEAGUES, first_set_checkpoint, load_elo_break_models, observe_first_set_break, tennis_projection,
+    ITF_LEAGUES, first_set_checkpoint, load_elo_break_models, next_point_scores, observe_first_set_break,
+    tennis_projection,
 )
 from .us_wager import BOOK_MAX_AGE, CENT, SLUG, WagerError, decimal, name, public, quote_order, team_names
 
 SCORE_MAX_AGE = 20
+STREAM_BOOK_MAX_AGE = 3
 DATA_ERRORS = (requests.RequestException, ValueError, KeyError, TypeError)
 
 
@@ -61,6 +66,72 @@ class Scores:
                     and fresh(state["score_utc"], SCORE_MAX_AGE)]
 
 
+class BookStream:
+    def __init__(self, market, credentials, wake):
+        self.market = market
+        self.credentials = credentials
+        self.wake = wake
+        self.snapshot = None
+        self.error = None
+
+    def follow(self, stop):
+        subscription = {"subscribe": {"requestId": "itf-score-paper", "marketSlugs": [self.market],
+                                      "subscriptionType": "SUBSCRIPTION_TYPE_MARKET_DATA"}}
+        while not stop.is_set():
+            try:
+                with connect(MARKETS_WS, additional_headers=auth_headers(self.credentials),
+                             open_timeout=8, close_timeout=1) as socket:
+                    socket.send(json.dumps(subscription))
+                    while not stop.is_set():
+                        try:
+                            frame = socket.recv(timeout=1)
+                        except TimeoutError:
+                            continue
+                        if frame == "ping":
+                            socket.send("pong")
+                            continue
+                        message = json.loads(frame)
+                        if not isinstance(message, dict):
+                            continue
+                        if message.get("error"):
+                            self.error = "Polymarket US rejected the book subscription."
+                            return
+                        book = message.get("marketData")
+                        if not isinstance(book, dict) or book.get("marketSlug") != self.market:
+                            continue
+                        full = all(isinstance(book.get(side), list) for side in ("bids", "offers"))
+                        previous = self.snapshot
+                        observed = utc(book.get("transactTime"))
+                        if not observed or not full or book.get("state") != "MARKET_STATE_OPEN":
+                            self.snapshot = None
+                        elif previous and observed < utc(previous[0]["transactTime"]):
+                            continue
+                        else:
+                            self.snapshot = (book, now())
+                            if not previous:
+                                print(f"Receiving full US book for {self.market}", flush=True)
+                        self.wake.set()
+            except InvalidStatus as exc:
+                if exc.response.status_code in (401, 403):
+                    self.error = "Polymarket US rejected the book WebSocket credentials."
+                    return
+            except (OSError, ValueError, WebSocketException, TimeoutError):
+                pass
+            finally:
+                self.snapshot = None
+                self.wake.set()
+            stop.wait(2)
+
+    def usable_after(self, score):
+        snapshot = self.snapshot
+        received = utc(score.get("score_utc"))
+        if snapshot and received and snapshot[1] >= received:
+            observed = utc(snapshot[0].get("transactTime"))
+            if observed and 0 <= (now() - observed).total_seconds() <= STREAM_BOOK_MAX_AGE:
+                return snapshot
+        return None
+
+
 def live_catalog():
     events = {}
     for offset in range(0, 1000, 100):
@@ -94,7 +165,7 @@ def catalog_event(events, score):
     return matches[0] if len(matches) == 1 else None
 
 
-def match_selection(event, score):
+def match_selection(event, score, *, score_based=False):
     slug = event.get("slug") or ""
     first, separator, second = str(event.get("title") or "").partition(" vs. ")
     if (not separator or not SLUG.fullmatch(slug) or (score.get("event_slug") and slug != score["event_slug"])
@@ -129,17 +200,31 @@ def match_selection(event, score):
         names.append(labels[0])
     if len(set(names)) != 2:
         return None
-    projection = tennis_projection({"event": slug, "title": event["title"]},
-                                   {**score, "score_order": " / ".join(names)}, now())
-    if not projection or not projection["checkpoint"] or not projection["elo_prior"]:
+    match = {"event": slug, "title": event["title"]}
+    ordered_score = {**score, "score_order": " / ".join(names)}
+    projection = tennis_projection(match, ordered_score, now())
+    if not projection or not projection["elo_prior"] or (not score_based and not projection["checkpoint"]):
         return None
     first_probability = projection["first_probability"]
     selected = int(first_probability < .5)
     probability = (first_probability, 1 - first_probability)[selected]
+    displayed_probability = probability
+    if score_based:
+        successors = next_point_scores(score["score_text"], score["period_text"])
+        if not successors:
+            return None
+        for next_score, next_period in successors:
+            alternative = tennis_projection(match, {**ordered_score, "score_text": next_score,
+                                                     "period_text": next_period})
+            if not alternative:
+                return None
+            probability = min(probability, alternative["first_probability" if selected == 0 else "second_probability"])
     if probability < MIN_PROBABILITY or ordered[selected].get("tradable") is not True:
         return None
-    return contract, ordered[selected]["long"], {"side": names[selected], "probability": probability,
-                                                   "checkpoint": projection["checkpoint"]}
+    pick = {"side": names[selected], "probability": probability, "checkpoint": projection["checkpoint"]}
+    if score_based:
+        pick.update(displayed_probability=displayed_probability, assumed_unseen_points=1)
+    return contract, ordered[selected]["long"], pick
 
 
 def order_for_stake(pick, contract, long, book, stake):
@@ -216,40 +301,68 @@ def submit(exchange, store, slug, payload):
     return {"order_id": order_id, "state": status}
 
 
-def price_candidate(candidate, stake):
+def price_candidate(candidate, stake, stream=None):
     game_id, state, event = candidate
     slug = event["slug"]
     try:
-        event = public("/v1/events/slug/" + slug)["event"]
-        selection = match_selection(event, state)
+        if stream:
+            snapshot = stream.usable_after(state)
+            if not snapshot:
+                return None
+        else:
+            event = public("/v1/events/slug/" + slug)["event"]
+        selection = match_selection(event, state, score_based=stream is not None)
         if selection is None:
             return None
         contract, long, pick = selection
-        book = public("/v1/markets/" + contract["slug"] + "/book", fresh_book=True)["marketData"]
+        book = snapshot[0] if stream else public(
+            "/v1/markets/" + contract["slug"] + "/book", fresh_book=True
+        )["marketData"]
         ticket = order_for_stake(pick, contract, long, book, stake)
         if ticket:
             payload, summary = ticket
-            return game_id, slug, state, payload, {**summary, **pick, "score": state["score_text"]}
+            detail = {**summary, **pick, "score": state["score_text"]}
+            if stream and stream.usable_after(state) is not snapshot:
+                return None
+            if stream:
+                detail.update(score_received_at=state["score_utc"], book_received_at=snapshot[1].isoformat())
+            return game_id, slug, state, payload, detail
     except DATA_ERRORS as exc:
         print(f"Skipped {slug}: {type(exc).__name__}", flush=True)
     return None
 
 
-def run(args, exchange):
-    scores, stop = Scores(), Event()
+def run(args, exchange, stream_credentials=None):
+    scores, stop, wake = Scores(), Event(), Event()
+    stream = BookStream("aec-" + args.stream_event, stream_credentials, wake) if args.stream_event else None
     mode = "live" if exchange else "paper"
     with closing(ledger(args.db)) as store, ThreadPoolExecutor(max_workers=4) as pool:
         if exchange and store.execute("SELECT 1 FROM tennis_orders WHERE mode='live' AND state='pending'").fetchone():
             raise RuntimeError("The ledger has an unresolved live order. Reconcile it with Polymarket US before trading.")
-        worker = Thread(target=follow_scores, args=(stop, scores.publish), daemon=True)
-        worker.start()
+        def publish(game_id, state):
+            scores.publish(game_id, state)
+            if stream:
+                wake.set()
+
+        workers = [Thread(target=follow_scores, args=(stop, publish), daemon=True)]
+        if stream:
+            workers.append(Thread(target=stream.follow, args=(stop,), daemon=True))
+        for worker in workers:
+            worker.start()
         heartbeat = refresh_catalog = 0
         events = {}
         try:
             while not stop.is_set():
+                wake.clear()
+                if stream and stream.error:
+                    raise RuntimeError(stream.error)
                 if monotonic() >= refresh_catalog:
                     try:
-                        events = live_catalog()
+                        if stream:
+                            event = public("/v1/events/slug/" + args.stream_event)["event"]
+                            events = {args.stream_event: event}
+                        else:
+                            events = live_catalog()
                     except DATA_ERRORS as exc:
                         events = {}
                         print(f"ITF market catalog unavailable: {type(exc).__name__}", flush=True)
@@ -263,7 +376,7 @@ def run(args, exchange):
                     print(f"{mode.upper()} · {len(events)} ITF listings · {len(active)} fresh score streams "
                           f"· {len(candidates)} matched and eligible for pricing", flush=True)
                     heartbeat = monotonic() + 30
-                results = pool.map(lambda candidate: price_candidate(candidate, args.stake), candidates)
+                results = pool.map(lambda candidate: price_candidate(candidate, args.stake, stream), candidates)
                 for result in results:
                     if not result:
                         continue
@@ -271,18 +384,23 @@ def run(args, exchange):
                     newest = scores.get(game_id)
                     if (not fresh(state["score_utc"], SCORE_MAX_AGE)
                             or not fresh(summary["quote_utc"], BOOK_MAX_AGE)
-                            or first_set_checkpoint(newest, now()) != summary["checkpoint"]
+                            or (not stream and first_set_checkpoint(newest, now()) != summary["checkpoint"])
                             or any(newest.get(key) != state.get(key)
                                    for key in ("phase", "score_text", "period_text", "score_columns"))):
                         continue
+                    if stream:
+                        current = stream.usable_after(newest)
+                        if not current or current[1].isoformat() != summary["book_received_at"]:
+                            continue
                     if not reserve(store, mode, slug, summary, args.daily_cap):
                         continue
                     print(json.dumps({"mode": mode, "event": slug, **summary,
                                       **(submit(exchange, store, slug, payload) if exchange else {})}), flush=True)
-                stop.wait(args.interval)
+                wake.wait(args.interval)
         finally:
             stop.set()
-            worker.join(timeout=3)
+            for worker in workers:
+                worker.join(timeout=3)
 
 
 def money(value):
@@ -302,11 +420,18 @@ def main():
     parser.add_argument("--daily-cap", type=money, help="Maximum reserved exposure per UTC day in USD")
     parser.add_argument("--interval", type=int, default=5, help="Seconds between scans")
     parser.add_argument("--db", type=Path, default=Path("data/paper_trades/tennis_orders.sqlite3"))
+    parser.add_argument("--stream-event", help="Paper-only ITF event slug for streamed score-based entries")
+    parser.add_argument("--env-file", type=Path, help="Read book WebSocket credentials for --stream-event")
     args = parser.parse_args()
     if args.interval < 3 or (args.daily_cap is not None and args.daily_cap < args.stake):
         parser.error("Use at least a 3-second scan interval and a daily cap at least as large as the stake.")
     if not all(load_elo_break_models()):
         parser.error("The ITF Elo ratings and set-break model artifacts are required.")
+    if args.stream_event and (args.live or not SLUG.fullmatch(args.stream_event)
+                              or args.stream_event.split("-", 1)[0].upper() not in ITF_LEAGUES):
+        parser.error("--stream-event requires an ITF event slug in paper mode")
+    if args.env_file and not args.stream_event:
+        parser.error("--env-file requires --stream-event")
     context = nullcontext()
     if args.live:
         key = os.getenv("POLYMARKET_KEY_ID")
@@ -317,11 +442,12 @@ def main():
 
         context = PolymarketUS(key_id=key, secret_key=secret, timeout=6, max_retries=0)
     try:
+        stream_credentials = get_credentials(False, args.env_file) if args.stream_event else None
         with context as exchange:
-            run(args, exchange)
+            run(args, exchange, stream_credentials)
     except KeyboardInterrupt:
         print("Stopped.", flush=True)
-    except (RuntimeError, sqlite3.Error) as exc:
+    except (RuntimeError, ValueError, OSError, ImportError, sqlite3.Error) as exc:
         parser.exit(1, f"Stopped: {exc}\n")
 
 
