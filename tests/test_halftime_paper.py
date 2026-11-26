@@ -202,3 +202,36 @@ def test_discovery_surfaces_nonmodeled_sports_without_using_their_markets(monkey
     assert listings["WCBB"] == [(league["slug"], league["markets"][0])]
     assert {game["league"] for game in games} == {"WCBB", "NHL"}
     assert "NHL" not in listings
+
+
+@pytest.mark.parametrize(("league", "quarter_length"), [("NBA", 720), ("NFL", 900)])
+def test_five_minute_halftime_window_boundaries(league, quarter_length):
+    fixture = event()
+    status = fixture["competitions"][0]["status"]
+    status["type"] = {"state": "in", "name": "STATUS_IN_PROGRESS"}
+    for period, clock_value, expected in (
+        (2, 301, None), (2, 300, "Before halftime"), (2, 0, None),
+        (3, quarter_length, "After halftime"), (3, quarter_length - 300, "After halftime"),
+        (3, quarter_length - 301, None), (1, 15, None), (4, 15, None),
+    ):
+        status.update(period=period, clock=clock_value)
+        game = paper.game_state(league, fixture)
+        if expected is None:
+            assert game is None
+        else:
+            assert game["checkpoint"] == expected
+            assert game["remaining"] == (4 - period) * quarter_length + clock_value
+    status.update(period=2, clock=300)
+    assert paper.game_state("WNBA", fixture) is None
+
+
+def test_nfl_window_model_uses_current_clock(monkeypatch):
+    fixture = event()
+    status = fixture["competitions"][0]["status"]
+    status.update(period=3, clock=840, type={"state": "in", "name": "STATUS_IN_PROGRESS"})
+    monkeypatch.setattr(paper, "load_nfl", lambda: {})
+    def forecast(state, artifact):
+        assert state == (67, 60, 1740)
+        return (.7, None, None), None
+    monkeypatch.setattr(paper, "nfl_forecast", forecast)
+    assert paper.home_probability(paper.game_state("NFL", fixture), NOW) == .7
