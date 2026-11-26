@@ -80,8 +80,54 @@ def test_stream_catalog_discovers_live_and_near_start_singles_in_both_leagues(mo
         "itfwo": [b, event("itfwo-doubles", 5, title="A - B vs. C - D")],
     }
     monkeypatch.setattr(wager, "now", lambda: clock)
-    monkeypatch.setattr(wager, "public", lambda path: {"events": pages[path.split("/")[3]]})
-    assert wager.stream_catalog() == {a["slug"]: a, b["slug"]: b}
+    def public(path, *, fresh_score):
+        assert fresh_score
+        return {"events": pages[path.split("/")[3]]}
+
+    monkeypatch.setattr(wager, "public", public)
+    assert wager.stream_catalog() == {
+        a["slug"]: {**a, "score_received_at": clock}, b["slug"]: {**b, "score_received_at": clock},
+    }
+
+
+def test_us_score_uses_provider_timestamp_and_explicit_side_order(monkeypatch):
+    clock = wager.now()
+    monkeypatch.setattr(wager, "now", lambda: clock)
+    source_time = (clock - timedelta(seconds=4)).isoformat()
+    slug = "itfme-one-two"
+    event = {
+        "slug": slug, "title": "One vs. Two", "live": True, "active": True, "closed": False,
+        "eventState": {"type": "tennis", "live": True, "score": "3-1:30-15", "period": "S1",
+                       "updatedAt": source_time},
+        "markets": [{"slug": f"aec-{slug}", "marketType": "moneyline",
+                     "sportsMarketType": "tennis_match_winner", "active": True, "closed": False,
+                     "marketSides": [{"team": {"ordering": "away", "abbreviation": "two"}},
+                                     {"team": {"ordering": "home", "abbreviation": "one"}}]}],
+    }
+    first = wager.us_score(event, clock - timedelta(seconds=2))
+    assert first["score_columns"] == ["one", "two"]
+    assert first["score_utc"] == source_time
+    scores = wager.Scores()
+    scores.publish(slug, first)
+    scores.publish(slug, wager.us_score(event, clock))
+    assert scores.get(slug) == first | {"first_set_break_utc": None}
+    assert len(scores.active_games()) == 1
+
+    market = f"aec-{slug}"
+    book = {"marketSlug": market, "state": "MARKET_STATE_OPEN", "bids": [], "offers": [],
+            "transactTime": (clock - timedelta(seconds=1)).isoformat()}
+    stream = wager.BookStream(None, Event())
+    stream.set_markets([market])
+    stream.snapshots[market] = (book, clock - timedelta(seconds=3))
+    assert stream.usable_after(market, first) is None
+    stream.publish(stream.markets, book)
+    assert stream.usable_after(market, first)
+
+    monkeypatch.setattr(wager, "now", lambda: clock + timedelta(seconds=30))
+    scores.publish(slug, wager.us_score(event, wager.now()))
+    assert scores.active_games() == []
+    event["eventState"].pop("updatedAt")
+    assert wager.us_score(event, wager.now()) is None
 
 
 def test_stream_keeps_separate_books_and_rejects_retired_subscriptions():

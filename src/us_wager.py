@@ -32,18 +32,20 @@ def decimal(value):
     raise WagerError("The exchange did not provide a valid price or quantity.")
 
 
-def public(path, *, fresh_book=False):
+def public(path, *, fresh_book=False, fresh_score=False):
     # Event metadata has a normal 30-second CDN lifetime. The book must be newer:
     # the gateway can serve a cached book even with a no-cache request header.
-    options = {"params": {"_": token_hex(8)}} if fresh_book else {}
+    options = {"params": {"_": token_hex(8)}} if fresh_book or fresh_score else {}
     response = requests.get(GATEWAY + path, timeout=(4, 6), headers={"Cache-Control": "no-cache"}, **options)
     if response.status_code == 404:
         raise WagerError("The matching Polymarket US listing is unavailable.")
     response.raise_for_status()
-    max_age = BOOK_MAX_AGE if fresh_book else EVENT_CACHE_MAX_AGE
+    max_age = BOOK_MAX_AGE if fresh_book or fresh_score else EVENT_CACHE_MAX_AGE
     if float(response.headers.get("Age", 0)) > max_age:
         if fresh_book:
             raise WagerError("Polymarket US returned a stale order book. Get a new US quote.")
+        if fresh_score:
+            raise WagerError("Polymarket US returned cached game state.")
         raise WagerError("The Polymarket US listing is out of date. Get a new US quote.")
     return response.json()
 

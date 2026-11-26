@@ -56,7 +56,14 @@ class Scores:
             previous = self.games.get(game_id, {})
             if previous.get("phase") == "final":
                 return
+            if (update.get("score_source") == "polymarket_us" and previous
+                    and utc(update["score_utc"]) <= utc(previous["score_utc"])):
+                return
             self.games[game_id] = {**update, "first_set_break_utc": observe_first_set_break(previous, update, utc)}
+
+    def discard(self, game_id):
+        with self.lock:
+            self.games.pop(game_id, None)
 
     def get(self, game_id):
         with self.lock:
@@ -148,7 +155,7 @@ class BookStream:
     def usable_after(self, market, score):
         with self.lock:
             snapshot = self.snapshots.get(market)
-        received = utc(score.get("score_utc"))
+        received = utc(score.get("score_received_at") or score.get("score_utc"))
         if snapshot and received and snapshot[1] >= received:
             observed = utc(snapshot[0].get("transactTime"))
             if observed and 0 <= (now() - observed).total_seconds() <= STREAM_BOOK_MAX_AGE:
@@ -174,14 +181,16 @@ def stream_catalog():
     events = {}
     for league in sorted(ITF_LEAGUES):
         for offset in range(0, 1000, 50):
-            page = public(f"/v2/leagues/{league.lower()}/events?limit=50&offset={offset}")["events"]
+            page = public(f"/v2/leagues/{league.lower()}/events?limit=50&offset={offset}",
+                          fresh_score=True)["events"]
+            received_at = now()
             for event in page:
                 slug = event.get("slug") or ""
                 start = utc(event.get("startTime"))
                 near_start = start and -DELAYED_START_GRACE <= start - reference <= PREMATCH_LEAD
                 if slug.startswith(league.lower() + "-") and (event.get("live") is True or near_start):
                     if tennis_contract(event):
-                        events[slug] = event
+                        events[slug] = {**event, "score_received_at": received_at}
             if len(page) < 50:
                 break
         else:
@@ -224,6 +233,35 @@ def tennis_contract(event):
     if len(contracts) != 1:
         return None
     return contracts[0]
+
+
+def us_score(event, received_at):
+    contract = tennis_contract(event)
+    state = event.get("eventState") or {}
+    if (not contract or event.get("live") is not True or state.get("type") != "tennis"
+            or state.get("live") is not True or state.get("ended") is True):
+        return None
+    timestamp = utc(state.get("updatedAt"))
+    score, period = state.get("score"), state.get("period")
+    if not (timestamp and isinstance(score, str) and score and isinstance(period, str) and period):
+        return None
+    if timestamp > received_at:
+        return None
+    sides = contract.get("marketSides") or []
+    if len(sides) != 2:
+        return None
+    players = {team.get("ordering"): team.get("abbreviation") or team.get("name")
+               for side in sides if (team := side.get("team"))}
+    if set(players) != {"home", "away"} or not all(players.values()) or players["home"] == players["away"]:
+        return None
+    slug = event["slug"]
+    columns = [players["home"], players["away"]]
+    return {
+        "event_slug": slug, "score_league": slug.split("-", 1)[0].upper(),
+        "score_columns": columns, "score_order": " / ".join(columns), "phase": "live",
+        "score_text": score, "period_text": period, "score_source": "polymarket_us",
+        "score_utc": timestamp.isoformat(), "score_received_at": received_at.isoformat(),
+    }
 
 
 def match_selection(event, score, *, score_based=False):
@@ -379,7 +417,8 @@ def price_candidate(candidate, stake, stream=None):
             if stream and stream.usable_after(contract["slug"], state) is not snapshot:
                 return None
             if stream:
-                detail.update(score_received_at=state["score_utc"], book_received_at=snapshot[1].isoformat())
+                detail.update(score_received_at=state.get("score_received_at", state["score_utc"]),
+                              score_source_updated_at=state["score_utc"], book_received_at=snapshot[1].isoformat())
             return game_id, slug, state, payload, detail
     except DATA_ERRORS as exc:
         print(f"Skipped {slug}: {type(exc).__name__}", flush=True)
@@ -395,16 +434,9 @@ def run(args, exchange, stream_credentials=None):
     with closing(ledger(args.db)) as store, ThreadPoolExecutor(max_workers=4) as pool:
         if exchange and store.execute("SELECT 1 FROM tennis_orders WHERE mode='live' AND state='pending'").fetchone():
             raise RuntimeError("The ledger has an unresolved live order. Reconcile it with Polymarket US before trading.")
-        def publish(game_id, state):
-            scores.publish(game_id, state)
-            if stream:
-                wake.set()
-
-        workers = [Thread(target=follow_scores, args=(stop, publish), daemon=True)]
-        if stream:
-            workers.append(Thread(target=stream.follow, args=(stop,), daemon=True))
-        for worker in workers:
-            worker.start()
+        worker = (Thread(target=stream.follow, args=(stop,), daemon=True) if stream
+                  else Thread(target=follow_scores, args=(stop, scores.publish), daemon=True))
+        worker.start()
         heartbeat = refresh_catalog = 0
         events = {}
         try:
@@ -415,8 +447,8 @@ def run(args, exchange, stream_credentials=None):
                 if monotonic() >= refresh_catalog:
                     try:
                         if args.stream_event:
-                            event = public("/v1/events/slug/" + args.stream_event)["event"]
-                            events = {args.stream_event: event}
+                            event = public("/v1/events/slug/" + args.stream_event, fresh_score=True)["event"]
+                            events = {args.stream_event: {**event, "score_received_at": now()}}
                         elif args.stream_all:
                             events = stream_catalog()
                         else:
@@ -426,14 +458,23 @@ def run(args, exchange, stream_credentials=None):
                         print(f"ITF market catalog unavailable: {type(exc).__name__}", flush=True)
                     if args.stream_all:
                         stream.set_markets(f"aec-{slug}" for slug in events)
-                    refresh_catalog = monotonic() + 15
+                    if stream:
+                        for slug, event in events.items():
+                            if update := us_score(event, event["score_received_at"]):
+                                scores.publish(slug, update)
+                            else:
+                                scores.discard(slug)
+                    refresh_catalog = monotonic() + (args.interval if stream else 15)
                 active = scores.active_games()
+                if stream:
+                    active = [(slug, state) for slug, state in active if slug in events]
                 candidates = [(game_id, state, event) for game_id, state in active
                               if (event := catalog_event(events, state)) is not None
                               and not store.execute("SELECT 1 FROM tennis_orders WHERE mode=? AND event=?",
                                                     (mode, event["slug"])).fetchone()]
                 if monotonic() >= heartbeat:
-                    print(f"{mode.upper()} · {len(events)} ITF listings · {len(active)} fresh score streams "
+                    reported = sum(event.get("live") is True for event in events.values())
+                    print(f"{mode.upper()} · {len(events)} ITF listings ({reported} live) · {len(active)} fresh scores "
                           f"· {len(candidates)} matched and eligible for pricing", flush=True)
                     heartbeat = monotonic() + 30
                 results = pool.map(lambda candidate: price_candidate(candidate, args.stake, stream), candidates)
@@ -459,8 +500,7 @@ def run(args, exchange, stream_credentials=None):
                 wake.wait(args.interval)
         finally:
             stop.set()
-            for worker in workers:
-                worker.join(timeout=3)
+            worker.join(timeout=3)
 
 
 def money(value):

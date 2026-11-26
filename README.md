@@ -215,7 +215,7 @@ updates, and a score stream with missing identities or stale data is skipped.
 #### Streamed score-based paper mode
 
 The runner discovers live ITF men's and women's singles on Polymarket US
-and looks up upcoming matches every 15 seconds, starting book subscriptions
+and looks up upcoming matches every five seconds by default, starting book subscriptions
 up to 15 minutes before their scheduled starts. In your local, git-ignored
 `.env` file set `POLYMARKET_US_KEY_ID`
 and `POLYMARKET_US_SECRET_KEY` for the read-only book subscription. On Windows
@@ -227,13 +227,16 @@ python -m src.tennis_wager --stream-all --env-file .env --stake 2 --db data/pape
 ```
 
 `--stream-event YOUR_ITF_EVENT_SLUG` selects a single match when needed.
-The runner evaluates any supported point score and wakes up on score and
-book updates. A paper entry uses an open full book received after the score
-and an exchange book timestamp at most three seconds old. It skips scores
+The runner checks timestamped US point scores on each poll and wakes up on
+book updates. A paper entry needs a score updated by the provider within
+20 seconds, an open full book received after the score, and an exchange book
+timestamp at most three seconds old. A repeat poll of the same score does not
+reset its age. It skips scores
 without an explicit point count, unsupported formats, and states where an
 unseen point could already end the match. It prices both possible next points
 and uses the lowest win probability across them and the displayed score.
 The 60% floor, five-point probability haircut, 5% fee-adjusted ROI threshold,
 and one-entry-per-event ledger still apply. The one-point assumption is a
-paper stress test. Local receipt timestamps cannot establish how far the
-score feed trails the court. This mode is paper-only.
+paper stress test. The US score timestamp shows when the provider updated
+its feed. The time from the actual point to that update remains unknown.
+This mode is paper-only.
