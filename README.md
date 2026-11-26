@@ -253,3 +253,24 @@ open market and an exchange timestamp at most three seconds old. The
 `book_source` field identifies the source of any logged paper entry.
 `--interval 3` sets the fastest supported score poll. The source score age,
 one-point check, Elo requirement, and price filters apply with both options.
+
+#### Compare score feeds
+
+Use the read-only probe during live ITF singles. It prompts for a separate
+[Live Tennis API key](https://livetennisapi.com/subscribe/free) when
+`LIVE_TENNIS_API_KEY` is unset. The default run uses 60 REST requests over
+about five minutes. Check the provider's daily quota before repeating it.
+
+```powershell
+python -m src.tennis_score_probe --samples 60 --interval 5
+```
+
+The probe pairs uniquely matched players and scheduled start times, then
+compares when the same score first reached your computer from each feed.
+Positive `median_alternate_lead_seconds` means the alternate feed arrived
+first at that polling cadence. The report also counts coverage, timestamps
+within 20 seconds, and older alternate states recently confirmed by the
+provider. Scores already visible at startup are excluded from the lead
+calculation. The comparison measures feed arrival, and the time of the
+point on court remains unknown. The probe leaves the wagering runner's
+score source untouched.
