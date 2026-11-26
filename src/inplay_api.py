@@ -17,7 +17,7 @@ from .nfl_inplay_scan import scan_nfl
 from .college_inplay_scan import scan_college_live
 from .game_board_feed import FINAL_SCORE_AGE, MAX_SCORE_AGE, follow_scores, scan_moneylines
 from .halftime_paper import LEAGUES as HALFTIME_LEAGUES, screen_halftime
-from .tennis_live import tennis_projection
+from .tennis_live import observe_first_set_break, tennis_projection
 from .us_wager import BOOK_MAX_AGE
 
 router = APIRouter()
@@ -169,8 +169,10 @@ class ScanState:
 
     def update_score(self, game_id, update):
         with self.lock:
-            if self.scores.get(game_id, {}).get("phase") != "final":
-                self.scores[game_id] = update
+            previous = self.scores.get(game_id, {})
+            if previous.get("phase") != "final":
+                first_set_break = observe_first_set_break(previous, update, utc)
+                self.scores[game_id] = {**update, "first_set_break_utc": first_set_break} if first_set_break else update
 
     def score_loop(self):
         follow_scores(self.stop, self.update_score)
@@ -195,6 +197,7 @@ class ScanState:
         score_states = {}
         catalog_at = utc(sports.get("observed_utc"))
         catalog_is_fresh = catalog_at is not None and -5 <= (now - catalog_at).total_seconds() <= MAX_SCORE_AGE.total_seconds()
+        tennis_states = {}
         for game in sports.get("games", []):
             event = game["event"]
             state = {}
@@ -207,9 +210,20 @@ class ScanState:
             prices = [] if state.get("phase") == "final" else [
                 row for row in quotes.get(event, []) if -5 <= (now - utc(row["quote_utc"])).total_seconds() <= MAX_AGE
             ]
-            tennis = tennis_projection(game, state or (game if catalog_is_fresh else {}))
+            current_score = state or (game if catalog_is_fresh else {})
+            tennis = tennis_projection(game, current_score, now)
+            if tennis:
+                tennis_states[game.get("slug") or event] = (current_score, tennis)
             if state or prices or tennis:
                 board.append({"event": event, "moneyline_quotes": prices, "tennis_projection": tennis, **state})
+        if isinstance(halftime.get("live_games"), list):
+            live_games = []
+            for game in halftime["live_games"]:
+                current_score, tennis = tennis_states.get(game["event"], ({}, None))
+                if not tennis or any(current_score.get(key) != game.get(key) for key in ("score_text", "period_text")):
+                    tennis = tennis_projection(game, game, now)
+                live_games.append({**game, "tennis_projection": tennis} if tennis else game)
+            halftime["live_games"] = live_games
         # A confirmed live/final transition invalidates stale pregame EV immediately.
         times = {game["event"]: utc(game["state_observed_utc"]) for game in games}
         fresh = [row for row in fresh if agrees_with_board(

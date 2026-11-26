@@ -160,3 +160,24 @@ python -m src.train_tennis_elo --men atp_matches_futures_202{2,3,4,5,6}.csv \
   --women wta_matches_qual_itf_202{2,3,4,5,6}.csv --holdout-year 2025
 python -m src.tennis_elo ITFME "Robert Strombachs" "Yash Yadav" --surface Hard
 ```
+
+### ITF live Elo and first-set break
+
+The live singles estimate combines overall Elo and completed-set game
+margins when the live feed identifies both score columns and both players
+resolve to ratings. The historical set-break model supplies the fallback.
+The fit uses 2023–24 match-start ratings and scores, with 2025 held out.
+Current point and game scores adjust the estimate within a set. The holdout
+measures match start and set breaks only.
+
+The Halftime view marks a late first set using the score and marks the five
+minutes following a recently observed transition into set two. Tennis has
+no countdown to set end, so the late-set label uses score state. These
+estimates appear in the live coverage list.
+
+To refit with the same historical inputs:
+
+```sh
+python -m src.train_tennis_halftime --men atp_matches_futures_202{2,3,4,5,6}.csv \
+  --women wta_matches_qual_itf_202{2,3,4,5,6}.csv
+```

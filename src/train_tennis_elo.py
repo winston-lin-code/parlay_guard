@@ -24,6 +24,7 @@ class Match:
     loser: str
     winner_name: str
     loser_name: str
+    margins: tuple[int, ...] = ()
 
 
 def read_matches(paths):
@@ -31,13 +32,14 @@ def read_matches(paths):
     for path in paths:
         with path.open(encoding="utf-8-sig", newline="") as handle:
             for row in csv.DictReader(handle):
-                if completed_itf_singles(row) is None:
+                margins = completed_itf_singles(row)
+                if margins is None:
                     continue
                 winner, loser = row["winner_id"], row["loser_id"]
                 if not winner.isdecimal() or not loser.isdecimal() or winner == loser:
                     continue
                 day = datetime.strptime(row["tourney_date"], "%Y%m%d")
-                match = Match(day, row["surface"].title(), winner, loser, row["winner_name"], row["loser_name"])
+                match = Match(day, row["surface"].title(), winner, loser, row["winner_name"], row["loser_name"], tuple(margins))
                 key = row["tourney_id"], row["match_num"]
                 if key in matches and matches[key] != match:
                     raise ValueError(f"Conflicting tournament match: {key}")
@@ -73,26 +75,31 @@ def apply_results(matches, players, k):
         surfaces[surface] = surfaces.get(surface, START_RATING) + change
 
 
-def replay(matches, k, weight, evaluation_years, *, retain_ratings=False):
-    players = defaultdict(empty_player)
+def walk_forward(matches, k, players, *, retain_ratings=False):
     pending = deque()
-    predictions = []
     for day, group in groupby(matches, key=lambda match: match.date):
         while pending and pending[0][0] <= day:
             _, available = pending.popleft()
             apply_results(available, players, k)
         games = list(group)
+        yield day, games
+        # The CSV date is a tournament start, so withhold the entire batch for two weeks.
+        pending.append((day + RESULT_LAG, games))
+    if retain_ratings:
+        for _, games in pending:
+            apply_results(games, players, k)
+
+
+def replay(matches, k, weight, evaluation_years, *, retain_ratings=False):
+    players = defaultdict(empty_player)
+    predictions = []
+    for day, games in walk_forward(matches, k, players, retain_ratings=retain_ratings):
         if day.year in evaluation_years:
             for game in games:
                 a, b = (players.get(player_id) or empty_player() for player_id in (game.winner, game.loser))
                 prob = win_probability(blended_rating(a, game.surface, weight),
                                        blended_rating(b, game.surface, weight))
                 predictions.append((prob, bool(a["matches"] and b["matches"])))
-        # The CSV date is a tournament start, so withhold the entire batch for two weeks.
-        pending.append((day + RESULT_LAG, games))
-    if retain_ratings:
-        for _, games in pending:
-            apply_results(games, players, k)
     return summarize(predictions), players
 
 
