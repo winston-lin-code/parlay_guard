@@ -119,6 +119,7 @@ def test_halftime_paper_logs_one_qualifying_bet_per_game(tmp_path, monkeypatch):
     ] == "already_logged"
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT count(*) FROM pro_halftime_entries").fetchone() == (1,)
+    assert ev.recent_paper_entries(path) == [result["entry"]]
 
 
 def test_mlb_halftime_uses_end_of_fifth():

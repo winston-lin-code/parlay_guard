@@ -155,6 +155,18 @@ details > summary { color: var(--muted); font-size: .84rem; }
       <ul class="halftime-list" id="halftime-other"></ul>
     </details>
   </section>
+  <section class="panel" id="pro-halftime-panel" aria-labelledby="pro-halftime-heading" hidden>
+    <header class="list-header"><h2 id="pro-halftime-heading">MLB and NHL halftime paper</h2><p id="pro-halftime-mode"></p></header>
+    <p class="muted halftime-rule">$10 cap · Win probability above 60% · Screened ROI strictly between 0% and 5%</p>
+    <p class="muted halftime-rule">MLB · End of the fifth inning. NHL · Second intermission.</p>
+    <p class="placeholder" id="pro-halftime-status" role="status">Waiting for MLB and NHL data</p>
+    <ul class="halftime-list" id="pro-halftime-games"></ul>
+    <details class="halftime-coverage" id="pro-halftime-entries" open>
+      <summary>Recent paper entries</summary>
+      <p id="pro-halftime-empty" class="muted">No paper entries logged</p>
+      <ul class="halftime-list" id="pro-halftime-entry-list"></ul>
+    </details>
+  </section>
   <div class="workspace" id="standard-panel">
     <section class="panel" aria-labelledby="games-heading">
       <header class="list-header"><h2 id="games-heading">Games</h2><p id="count"></p></header>
@@ -248,7 +260,7 @@ const seconds = (value, now) => Math.max(0, Math.floor(age(value, now) / 1000)) 
 const validSlug = /^[a-z0-9][a-z0-9-]*$/;
 
 let snapshot = {};
-let phase = 'all';
+let phase = new URLSearchParams(window.location.search).get('phase') === 'halftime' ? 'halftime' : 'all';
 let chosen = '';
 let selectedGame = '';
 let listFingerprint = '';
@@ -258,6 +270,7 @@ let alternativesFingerprint = '';
 let warningsFingerprint = '';
 let halftimeFingerprint = '';
 let halftimeCoverageFingerprint = '';
+let proHalftimeFingerprint = '';
 let loading = false;
 let offline = false;
 const previousPrices = new Map();
@@ -323,6 +336,7 @@ function currentGames(now) {
 const HALFTIME_LABELS = {
   NBA:'NBA', NFL:'NFL', CBB:'Men’s college basketball', WCBB:'Women’s college basketball',
   CFB:'FBS college football', WNBA:'WNBA', ITFME:'ITF Men', ITFWO:'ITF Women',
+  MLB:'MLB', NHL:'NHL',
 };
 
 function halftimeLeague(game) {
@@ -332,7 +346,9 @@ function halftimeLeague(game) {
 
 function updateLeagueOptions(games) {
   const labels = [...games.values()].map(game => phase === 'halftime' ? halftimeLeague(game) : game.league);
-  const modeled = phase === 'halftime' ? snapshot.halftime_paper?.leagues || [] : [];
+  const modeled = phase === 'halftime' ? [
+    ...(snapshot.halftime_paper?.leagues || []), ...(snapshot.pro_halftime?.leagues || []).map(value => value.toUpperCase())
+  ] : [];
   const values = [...new Set([...modeled, ...labels].filter(Boolean))].sort();
   const key = JSON.stringify([phase === 'halftime', values]);
   if (key === leaguesFingerprint) return;
@@ -577,9 +593,76 @@ function renderHalftime(now, league, query, games) {
   }));
 }
 
+function renderProHalftime(now, league, query) {
+  const scan = snapshot.pro_halftime;
+  const current = !offline && fresh(scan?.updated_utc, now);
+  const useLeague = value => !league || value.toUpperCase() === league;
+  text('pro-halftime-mode', scan?.paper_logging ? 'Paper logging on' : 'Research preview');
+  const rows = current ? (scan.scans || []).filter(row => useLeague(row.league)) : [];
+  const games = rows.flatMap(row => row.games || []).filter(
+    game => (game.title || game.event).toLowerCase().includes(query)
+  );
+  const status = [
+    ...(!current ? ['Waiting for fresh MLB and NHL data.'] : []),
+    ...(scan?.warning ? [scan.warning] : []),
+    ...rows.flatMap(row => {
+      const label = row.league.toUpperCase();
+      if (row.status === 'no_live_listings') {
+        return [row.next_start_et ? label + ' next start ' + proTipTime.format(new Date(row.next_start_et))
+          : label + ' has no live or upcoming listings.'];
+      }
+      if (row.status) return [label + ' · ' + readableStatus(row.status)];
+      return [];
+    }),
+  ];
+  if (current && rows.length && !games.length && !status.length) status.push('No games match the current filters.');
+  $('pro-halftime-status').hidden = !status.length;
+  text('pro-halftime-status', status.join(' · '));
+  const entries = (scan?.entries || []).filter(row => useLeague(row.league)
+    && [row.event, row.quote?.side].some(value => value?.toLowerCase().includes(query)));
+  const available = games.map(game => [game, Object.values(game.quotes || {}).filter(
+    quote => quote && age(quote.quote_utc, now) >= 0 && age(quote.quote_utc, now) <= 5000
+  )]);
+  const key = JSON.stringify([available, entries]);
+  if (key === proHalftimeFingerprint) return;
+  proHalftimeFingerprint = key;
+  $('pro-halftime-games').replaceChildren(...available.map(([game, quotes]) => {
+    const row = element('li', '');
+    row.append(element('h3', game.title || game.event),
+      element('p', [game.league.toUpperCase(), game.official?.score_away_home?.join('–'),
+        game.official?.period ? (game.league === 'mlb' ? 'Inning ' : 'Period ') + game.official.period : '',
+        readableStatus(game.halftime_paper?.status || game.pricing_status)].filter(Boolean).join(' · '), 'muted'));
+    if (game.win_probability) row.append(element('p',
+      'Away ' + pct(game.win_probability.away) + ' · Home ' + pct(game.win_probability.home) + ' win probability'));
+    for (const quote of quotes) row.append(element('p', [quote.side, price(Number(quote.limit)) + ' limit',
+      edge(quote.screened_ev) + ' screened ROI', '$' + Number(quote.total_estimate).toFixed(2) + ' cost'].join(' · ')));
+    return row;
+  }));
+  $('pro-halftime-empty').hidden = entries.length > 0;
+  $('pro-halftime-entry-list').replaceChildren(...entries.map(entry => {
+    const row = element('li', '');
+    row.append(element('p', entry.quote?.side || entry.event, 'selection'),
+      element('p', [entry.league.toUpperCase(), entry.event, proTipTime.format(new Date(entry.recorded_at)),
+        '$' + Number(entry.quote?.total_estimate).toFixed(2) + ' simulated cost',
+        edge(entry.quote?.screened_ev) + ' screened ROI'].join(' · '), 'muted'));
+    return row;
+  }));
+}
+
+const proTipTime = new Intl.DateTimeFormat(undefined, {weekday:'short', hour:'numeric', minute:'2-digit',
+  timeZone:'America/New_York', timeZoneName:'short'});
+const readableStatus = value => ({
+  outside_halftime_checkpoint:'Waiting for the halftime checkpoint',
+  outside_probability_or_roi_band:'Outside the paper entry thresholds',
+  paper_entry_logged:'Paper entry logged',
+  already_logged:'Paper entry already logged',
+  no_verified_halftime_quote:'Waiting for a verified halftime quote',
+  feed_unavailable:'Feed unavailable',
+})[value] || (value || '').replaceAll('_', ' ');
+
 function render() {
   const now = Date.now();
-  const timestamps = phase === 'halftime' ? [snapshot.halftime_paper?.updated_utc]
+  const timestamps = phase === 'halftime' ? [snapshot.halftime_paper?.updated_utc, snapshot.pro_halftime?.updated_utc]
     : [snapshot.updated_utc, ...(snapshot.board || []).flatMap(game =>
     [game.phase === 'live' ? game.score_utc : null, ...game.moneyline_quotes.map(row => row.quote_utc)])];
   const live = !offline && timestamps.some(value => fresh(value, now));
@@ -594,9 +677,12 @@ function render() {
   const query = $('search').value.trim().toLowerCase();
   const league = $('sport').value;
   $('standard-panel').hidden = phase === 'halftime';
-  $('halftime-panel').hidden = phase !== 'halftime';
+  const proLeague = ['MLB', 'NHL'].includes(league);
+  $('halftime-panel').hidden = phase !== 'halftime' || proLeague;
+  $('pro-halftime-panel').hidden = phase !== 'halftime' || Boolean(league && !proLeague);
   if (phase === 'halftime') {
-    renderHalftime(now, league, query, halftimeGames);
+    if (!proLeague) renderHalftime(now, league, query, halftimeGames);
+    if (!league || proLeague) renderProHalftime(now, league, query);
     return;
   }
   const phases = {live:0, pregame:1, unknown:2, final:3};
@@ -797,6 +883,9 @@ $('games').addEventListener('click', event => {
   render();
   if (window.matchMedia('(max-width: 700px)').matches) $('game-title').focus();
 });
+for (const tab of $('phases').querySelectorAll('button')) {
+  tab.setAttribute('aria-pressed', String(tab.dataset.phase === phase));
+}
 refresh();
 setInterval(refresh, 5000);
 setInterval(render, 1000);

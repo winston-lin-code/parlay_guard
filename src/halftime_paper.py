@@ -19,6 +19,7 @@ from .halftime_basketball_model import HALF_PERIOD, load_models, win_probability
 from .nfl_inplay_model import forecast as nfl_forecast, load as load_nfl
 from .nfl_inplay_scan import NFL_SCOREBOARD
 from .predict_today import ET
+from .tennis_live import ITF_LEAGUES
 from .us_wager import BOOK_MAX_AGE, CENT, GATEWAY, ONE, SLUG, STANDARD_FEE, WagerError, contract_url, decimal, name, public, team_names
 
 PAPER_STAKE = Decimal("2")
@@ -214,6 +215,8 @@ def contract_and_sides(game):
 
 
 def live_inventory():
+    from .tennis_wager import us_score
+
     listings = {league: {} for league in OTHER_SCOREBOARDS}
     live_games = {}
     offset = 0
@@ -234,6 +237,13 @@ def live_inventory():
                 live_games[slug] = {"event": slug, "league": league, "title": title, "phase": "live",
                                     "score_text": str(event.get("score") or ""),
                                     "period_text": str(event.get("period") or "")}
+                if league in ITF_LEAGUES and (state := us_score(event, datetime.now(timezone.utc))):
+                    columns = state["score_columns"]
+                    participants = {name(team.get("abbreviation")): team.get("name") for team in event["teams"]}
+                    labels = [participants.get(name(column)) for column in columns]
+                    if all(labels):
+                        state["score_order"] = " / ".join(labels)
+                    live_games[slug].update(state)
             if league not in listings:
                 continue
             for market in event.get("markets") or []:

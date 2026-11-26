@@ -185,7 +185,18 @@ def log_paper_entry(path, game, stake):
     return {"status": "paper_entry_logged", "entry": entry} if inserted else {"status": "already_logged"}
 
 
-def scan(league, stake, slippage, *, paper_db=None):
+def recent_paper_entries(path, limit=20):
+    if not path.is_file():
+        return []
+    with closing(sqlite3.connect(path.absolute().as_uri() + "?mode=ro", uri=True, timeout=5)) as db:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='pro_halftime_entries'").fetchone():
+            return []
+        return [json.loads(detail) for detail, in db.execute(
+            "SELECT detail FROM pro_halftime_entries ORDER BY recorded_at DESC, event LIMIT ?", (limit,)
+        )]
+
+
+def scan(league, stake, slippage, *, paper_db=None, halftime_only=False):
     artifact = model.load(league)
     if not artifact:
         return {"league": league, "status": "model_unavailable"}
@@ -200,8 +211,17 @@ def scan(league, stake, slippage, *, paper_db=None):
     results = []
     for verified in observed["games"]:
         event = events[verified["event"]][0]
-        if paper_db is not None and not at_halftime(league, verified.get("official", {})):
-            results.append({**verified, "pricing_status": "outside_halftime_checkpoint"})
+        title = event.get("title") or verified["event"]
+        official = verified.get("official")
+        if official is None:
+            results.append({**verified, "title": title, "pricing_status": verified["status"]})
+            continue
+        if (paper_db is not None or halftime_only) and not at_halftime(league, official):
+            row = {**verified, "title": title, "pricing_status": "outside_halftime_checkpoint"}
+            if state := model.model_state(league, official):
+                home = model.forecast(state, artifact)
+                row["win_probability"] = {"home": home, "away": 1 - home}
+            results.append(row)
             continue
         try:
             row = evaluate(league, event, verified, artifact, stake, slippage)
@@ -209,7 +229,7 @@ def scan(league, stake, slippage, *, paper_db=None):
             row = {**verified, "paper": True, "pricing_status": "quote_or_recheck_unavailable", "error": str(exc)}
         if paper_db is not None:
             row["halftime_paper"] = log_paper_entry(paper_db, row, stake)
-        results.append(row)
+        results.append({**row, "title": title})
     return {"league": league, "listings_checked": len(events), "games": results}
 
 

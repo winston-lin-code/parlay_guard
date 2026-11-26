@@ -296,6 +296,27 @@ cannot be confirmed.
 
 ### MLB and NHL in-game moneyline EV
 
+Start the full live dashboard and the MLB and NHL halftime paper scanner
+from the repository root.
+
+```powershell
+python -m src.run_research
+```
+
+Open [the live dashboard](http://127.0.0.1:8000/) or jump directly to
+[the Halftime tab](http://127.0.0.1:8000/inplay?phase=halftime#pro-halftime-panel).
+The Halftime tab shows current win probabilities when supported, verified
+quotes at the checkpoint, upcoming starts, and recent paper entries from
+`data/paper_trades/pro_halftime.sqlite3`. Real-money orders are disabled
+in this launcher. The built-in scanner uses the same rule and ledger as
+the standalone `--paper-halftime` command below. Use one runner per checkout.
+
+NBA forecasts and player props require the local NBA history and model
+artifacts used by the regular dashboard. Keep those files when updating
+the checkout.
+
+Run the moneyline EV scanner on its own from the terminal.
+
 ```powershell
 python -m src.pro_live_ev --watch --stake 2 --slippage .01
 ```
