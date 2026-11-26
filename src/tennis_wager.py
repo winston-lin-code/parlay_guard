@@ -118,7 +118,19 @@ def catalog_event(events, score):
     return matches[0] if len(matches) == 1 else None
 
 
-def match_selection(event, score, report=lambda reason: None):
+def screening_checkpoint(score, at, *, early_set_two=False):
+    checkpoint = first_set_checkpoint(score, at)
+    if checkpoint or not early_set_two or score.get("first_set_break_utc"):
+        return checkpoint
+    score_text = score.get("score_text", "").split(",")
+    if score.get("period_text", "").strip().upper() == "S2" and len(score_text) == 2:
+        games = score_text[1].partition(":")[0].strip()
+        if games in ("0-0", "1-0", "0-1"):
+            return "Early set two (score-based)"
+    return None
+
+
+def match_selection(event, score, report=lambda reason: None, *, early_set_two=False):
     slug = event.get("slug") or ""
     first, separator, second = str(event.get("title") or "").partition(" vs. ")
     if (not separator or not SLUG.fullmatch(slug) or (score.get("event_slug") and slug != score["event_slug"])
@@ -165,7 +177,8 @@ def match_selection(event, score, report=lambda reason: None):
     if not projection:
         report("unsupported score format")
         return None
-    if not projection["checkpoint"]:
+    checkpoint = screening_checkpoint(score, now(), early_set_two=early_set_two)
+    if not checkpoint:
         if score["period_text"].strip().upper() in ("S2", "TB2") and not score.get("first_set_break_utc"):
             report("set-two transition not observed")
         else:
@@ -184,7 +197,7 @@ def match_selection(event, score, report=lambda reason: None):
         report("selected side paused")
         return None
     return contract, ordered[selected]["long"], {"side": names[selected], "probability": probability,
-                                                   "checkpoint": projection["checkpoint"]}
+                                                   "checkpoint": checkpoint}
 
 
 def order_for_stake(pick, contract, long, book, stake, report=lambda reason: None):
@@ -286,7 +299,7 @@ def resolve_catalog_score(slug, listed, detail):
     return refreshed, None
 
 
-def price_candidate(candidate, stake):
+def price_candidate(candidate, stake, *, early_set_two=False):
     game_id, state, event = candidate
     slug = event["slug"]
     reasons = []
@@ -296,7 +309,7 @@ def price_candidate(candidate, stake):
             state, reason = resolve_catalog_score(slug, state, event)
             if reason:
                 return None, reason
-        selection = match_selection(event, state, reasons.append)
+        selection = match_selection(event, state, reasons.append, early_set_two=early_set_two)
         if selection is None:
             return None, reasons[-1]
         contract, long, pick = selection
@@ -314,6 +327,7 @@ def price_candidate(candidate, stake):
 def run(args, exchange):
     scores, stop = Scores(), Event()
     mode = "live" if exchange else "paper"
+    early_set_two = args.paper_early_set_two and exchange is None
     with closing(ledger(args.db)) as store, ThreadPoolExecutor(max_workers=4) as pool:
         if exchange and store.execute("SELECT 1 FROM tennis_orders WHERE mode='live' AND state='pending'").fetchone():
             raise RuntimeError("The ledger has an unresolved live order. Reconcile it with Polymarket US before trading.")
@@ -355,7 +369,8 @@ def run(args, exchange):
                         print(f"Skipped since last update · {counts}", flush=True)
                         skipped.clear()
                     heartbeat = monotonic() + 30
-                results = pool.map(lambda candidate: price_candidate(candidate, args.stake), candidates)
+                results = pool.map(
+                    lambda candidate: price_candidate(candidate, args.stake, early_set_two=early_set_two), candidates)
                 for result, reason in results:
                     if reason:
                         skipped[reason] += 1
@@ -370,7 +385,7 @@ def run(args, exchange):
                         newest = scores.get(game_id)
                     if (not fresh(state["score_utc"], SCORE_MAX_AGE)
                             or not fresh(summary["quote_utc"], BOOK_MAX_AGE)
-                            or first_set_checkpoint(newest, now()) != summary["checkpoint"]
+                            or screening_checkpoint(newest, now(), early_set_two=early_set_two) != summary["checkpoint"]
                             or any(newest.get(key) != state.get(key)
                                    for key in ("phase", "score_text", "period_text", "score_columns"))):
                         skipped["score, quote, or checkpoint changed before entry"] += 1
@@ -398,7 +413,10 @@ def money(value):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--live", action="store_true", help="Submit real orders. Default is paper logging.")
+    timing = parser.add_mutually_exclusive_group()
+    timing.add_argument("--paper-early-set-two", action="store_true",
+                        help="Also screen early set two in paper mode when the break time is unknown")
+    timing.add_argument("--live", action="store_true", help="Submit real orders. Default is paper logging.")
     parser.add_argument("--stake", type=money, default=PAPER_STAKE, help="Maximum all-in cost per order in USD")
     parser.add_argument("--daily-cap", type=money, help="Maximum reserved exposure per UTC day in USD")
     parser.add_argument("--interval", type=int, default=5, help="Seconds between scans")

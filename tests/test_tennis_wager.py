@@ -87,7 +87,7 @@ def test_pricing_uses_newer_catalog_score_and_preserves_transition(monkeypatch):
 
     monkeypatch.setattr(wager, "public", lambda path: {"event": second})
 
-    def capture(event, state, report):
+    def capture(event, state, report, *, early_set_two=False):
         assert state == newest
         report("observed newer score")
 
@@ -111,3 +111,17 @@ def test_catalog_recognizes_missed_opening_only_with_recent_set_one_score():
     assert wager.catalog_scores({slug: late}, previous)[slug]["first_set_break_utc"] is None
     old = {slug: {**previous[slug], "score_utc": (now - timedelta(seconds=61)).isoformat()}}
     assert wager.catalog_scores({slug: second}, old)[slug]["first_set_break_utc"] is None
+
+
+def test_optional_early_set_two_screening_uses_score_only_for_unknown_break():
+    from datetime import timedelta
+
+    now = wager.now()
+    early = {"period_text": "S2", "score_text": "6-4, 1-0:15-0"}
+    assert wager.screening_checkpoint(early, now) is None
+    assert wager.screening_checkpoint(early, now, early_set_two=True) == "Early set two (score-based)"
+    later = {**early, "score_text": "6-4, 1-1:0-0"}
+    assert wager.screening_checkpoint(later, now, early_set_two=True) is None
+    measured = {**early, "first_set_break_utc": (now - timedelta(minutes=2)).isoformat()}
+    assert wager.screening_checkpoint(measured, now, early_set_two=True) == "Within 5 min of observed set break"
+    assert wager.screening_checkpoint(measured, now + timedelta(minutes=4), early_set_two=True) is None

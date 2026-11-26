@@ -198,6 +198,14 @@ python -m pip install -r requirements.txt
 python -m src.tennis_wager --stake 2
 ```
 
+If the catalog misses the start of set two, this optional paper rule also
+screens set two at 0–0, 1–0, or 0–1 when the break time is unknown. These
+entries are labeled `Early set two (score-based)` in the ledger.
+
+```powershell
+python -m src.tennis_wager --stake 2 --paper-early-set-two
+```
+
 Real-order mode requires local Polymarket US credentials in
 `POLYMARKET_KEY_ID` and `POLYMARKET_SECRET_KEY` and a UTC daily exposure cap.
 The stake is a maximum all-in cost. The daily cap counts reserved exposure
