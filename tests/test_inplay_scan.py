@@ -125,3 +125,45 @@ def test_one_paper_pick_per_current_fixture():
     ], [game, pregame, started], NOW)
     assert [entry["token_id"] for entry in ranked] == ["1", "4", "2"]
     assert picks == {"game-a": "1", "game-b": "4"}
+
+
+@pytest.mark.parametrize("live", [False, True])
+def test_pro_halftime_dashboard_keeps_rule_and_filters_expired_quotes(monkeypatch, tmp_path, live):
+    from decimal import Decimal
+    from src import inplay_api
+
+    state = inplay_api.ScanState()
+    called = {}
+    now = datetime.now(timezone.utc)
+    expired = (now - timedelta(seconds=6)).isoformat()
+    fresh = now.isoformat()
+
+    def scan(league, stake, slippage, *, paper_db, halftime_only, live_orders):
+        called[league] = stake, slippage, paper_db, halftime_only, live_orders
+        return {"league": league, "games": [{
+            "pricing_status": "priced",
+            "quotes": {"away": {"quote_utc": expired}, "home": {"quote_utc": fresh}},
+        }]}
+
+    monkeypatch.setenv("PG_ENABLE_PRO_HALFTIME_PAPER", "1")
+    monkeypatch.setattr(inplay_api, "ROOT", tmp_path)
+    monkeypatch.setattr(inplay_api.pro_live_ev, "scan", scan)
+    monkeypatch.setattr(inplay_api.pro_live_ev, "recent_paper_entries", lambda path: [{"event": "nhl-test"}])
+    monkeypatch.setattr(state.stop, "wait", lambda *_: state.stop.set())
+    if live:
+        from types import SimpleNamespace
+
+        state.pro_halftime_orders = SimpleNamespace(recent=lambda: [{"event": "nhl-test", "state": "unknown"}])
+    state.pro_halftime_loop()
+
+    pro = state.read()["pro_halftime"]
+    assert pro["paper_logging"] is not live
+    assert pro["live_ordering"] is live
+    assert set(called) == {"mlb", "nhl"}
+    assert all(values == (
+        Decimal("5.00" if live else "10.00"), Decimal(".01"),
+        None if live else tmp_path / "data/paper_trades/pro_halftime.sqlite3", True, state.pro_halftime_orders,
+    ) for values in called.values())
+    assert [entry["event"] for entry in pro["entries"]] == ["nhl-test"]
+    assert bool(pro["warning"]) is live
+    assert all(set(item["games"][0]["quotes"]) == {"home"} for item in pro["scans"])

@@ -1,9 +1,13 @@
 """Independent live scanner so slow pregame model refreshes don't block quotes."""
 
+import os
 import re
+import sqlite3
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 from fastapi import APIRouter
@@ -17,11 +21,31 @@ from .nfl_inplay_scan import scan_nfl
 from .college_inplay_scan import scan_college_live
 from .game_board_feed import FINAL_SCORE_AGE, MAX_SCORE_AGE, follow_scores, scan_moneylines
 from .halftime_paper import LEAGUES as HALFTIME_LEAGUES, screen_halftime
-from .tennis_live import observe_first_set_break, tennis_projection
+from .tennis_live import ITF_LEAGUES, observe_first_set_break, tennis_projection
+from .tennis_wager import SCORE_MAX_AGE as ITF_SCORE_MAX_AGE, fresh as fresh_itf_score
 from .us_wager import BOOK_MAX_AGE
+from . import cs2_live_ev, pro_live_ev, wcbb_anytime
+from .pro_halftime_orders import LIVE_STAKE
 
 router = APIRouter()
-PAGE = Path(__file__).resolve().parents[1] / "static" / "inplay.html"
+ROOT = Path(__file__).resolve().parents[1]
+PAGE = ROOT / "static" / "inplay.html"
+
+
+def pro_snapshot_for_display(snapshot, now):
+    scans = []
+    for scan in snapshot["scans"]:
+        games = []
+        for game in scan.get("games", []):
+            quotes = {side: quote for side, quote in game.get("quotes", {}).items()
+                      if quote and (quoted := utc(quote.get("quote_utc")))
+                      and 0 <= (now - quoted).total_seconds() <= pro_live_ev.MAX_BOOK_AGE}
+            status = game["pricing_status"]
+            if status == "priced" and not quotes:
+                status = "quote_expired"
+            games.append({**game, "quotes": quotes, "pricing_status": status})
+        scans.append({**scan, "games": games} if "games" in scan else scan)
+    return {**snapshot, "scans": scans}
 
 
 def rank_opportunities(rows, games, now):
@@ -75,12 +99,21 @@ class ScanState:
         self.scores = {}
         self.live_sports = {}
         self.halftime = {"updated_utc": None, "leagues": list(HALFTIME_LEAGUES), "picks": [], "warnings": []}
+        self.pro_halftime = {"updated_utc": None, "leagues": list(pro_live_ev.LEAGUES),
+                             "scans": [], "entries": [], "paper_logging": False, "live_ordering": False}
+        self.pro_halftime_orders = None
+        self.wcbb = {"status": "waiting", "updated_utc": None, "games": [], "entries": [],
+                     "performance": wcbb_anytime.performance([]), "warnings": []}
+        self.wcbb_settlement_error = None
+        self.cs2 = {"updated_utc": None, "games": [], "warnings": [], "rating_sources": [], "round_feed": False}
         self.college = {"updated_utc": None, "games": [], "opportunities": [], "warnings": []}
 
     def start(self):
         self.stop.clear()
         tasks = ((self.live_loop,), (self.catalog_loop,), (self.sports_loop,), (self.college_loop,),
-                 (self.board_loop,), (self.score_loop,), (self.halftime_loop,), (self.league_live_loop, "nfl", scan_nfl),
+                 (self.board_loop,), (self.score_loop,), (self.halftime_loop,), (self.pro_halftime_loop,),
+                 (self.wcbb_loop,), (self.wcbb_settlement_loop,), (self.cs2_loop,),
+                 (self.league_live_loop, "nfl", scan_nfl),
                  (self.league_live_loop, "mbb", scan_college_live, "mbb"),
                  (self.league_live_loop, "cfb", scan_college_live, "cfb"))
         for target, *args in tasks:
@@ -117,6 +150,77 @@ class ScanState:
             with self.lock:
                 self.halftime = value
             self.stop.wait(max(4, 12 - (time.monotonic() - started)))
+
+    def pro_halftime_loop(self):
+        live_orders = self.pro_halftime_orders
+        logging = live_orders is None and os.getenv("PG_ENABLE_PRO_HALFTIME_PAPER") == "1"
+        ledger = ROOT / pro_live_ev.DEFAULT_PAPER_DB
+        stake = LIVE_STAKE if live_orders is not None else Decimal("10.00")
+
+        def scan(league):
+            try:
+                return pro_live_ev.scan(league, stake, Decimal(".01"), paper_db=ledger if logging else None,
+                                        halftime_only=True, live_orders=live_orders)
+            except (sqlite3.Error, ValueError, OSError) as exc:
+                return {"league": league, "status": "halftime_scan_unavailable", "error": type(exc).__name__}
+
+        with ThreadPoolExecutor(max_workers=len(pro_live_ev.LEAGUES)) as pool:
+            while not self.stop.is_set():
+                started = time.monotonic()
+                scans = list(pool.map(scan, pro_live_ev.LEAGUES))
+                try:
+                    entries = live_orders.recent() if live_orders is not None else pro_live_ev.recent_paper_entries(ledger)
+                    warning = None
+                    if any(entry.get("state") in ("pending", "unknown") for entry in entries):
+                        warning = "An order state is unresolved. Check your Polymarket US activity."
+                except (sqlite3.Error, ValueError, OSError):
+                    entries, warning = [], "Halftime ledger unavailable."
+                value = {"updated_utc": datetime.now(timezone.utc).isoformat(),
+                         "leagues": list(pro_live_ev.LEAGUES), "scans": scans, "entries": entries,
+                         "stake_cap": str(stake), "paper_logging": logging,
+                         "live_ordering": live_orders is not None, "warning": warning}
+                with self.lock:
+                    self.pro_halftime = value
+                self.stop.wait(max(1, 5 - (time.monotonic() - started)))
+
+    def wcbb_loop(self):
+        ledger = ROOT / wcbb_anytime.DB_PATH
+        while not self.stop.is_set():
+            started = time.monotonic()
+            try:
+                value = wcbb_anytime.scan(ledger)
+            except Exception as exc:
+                with self.lock:
+                    value = {**self.wcbb, "status": "feed_unavailable", "updated_utc": None, "games": [],
+                             "warnings": [f"WCBB paper scan unavailable ({type(exc).__name__})."]}
+            with self.lock:
+                self.wcbb = value
+            self.stop.wait(max(3, 12 - (time.monotonic() - started)))
+
+    def wcbb_settlement_loop(self):
+        while not self.stop.is_set():
+            try:
+                wcbb_anytime.settle(ROOT / wcbb_anytime.DB_PATH)
+                error = None
+            except (sqlite3.Error, ValueError, OSError) as exc:
+                error = f"WCBB settlements unavailable ({type(exc).__name__})."
+            with self.lock:
+                self.wcbb_settlement_error = error
+            self.stop.wait(60)
+
+    def cs2_loop(self):
+        reader = cs2_live_ev.Reader()
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            while not self.stop.is_set():
+                started = time.monotonic()
+                try:
+                    value = reader.snapshot(pool)
+                except Exception as exc:
+                    value = {"updated_utc": None, "games": [], "rating_sources": [], "round_feed": False,
+                             "warnings": [f"CS2 reader unavailable ({type(exc).__name__})."]}
+                with self.lock:
+                    self.cs2 = value
+                self.stop.wait(max(1, cs2_live_ev.PRICE_INTERVAL - (time.monotonic() - started)))
 
     def update_catalog(self, value):
         with self.lock:
@@ -183,6 +287,10 @@ class ScanState:
             college, live_sports = dict(self.college), list(self.live_sports.values())
             quotes, scores = dict(self.moneyline_quotes), dict(self.scores)
             halftime = dict(self.halftime)
+            pro_halftime = dict(self.pro_halftime)
+            wcbb = dict(self.wcbb)
+            wcbb_settlement_error = self.wcbb_settlement_error
+            cs2 = self.cs2
         now = datetime.now(timezone.utc)
         fresh, games, observations = [], [], []
         sources = (snapshot, college, *live_sports)
@@ -221,7 +329,11 @@ class ScanState:
             for game in halftime["live_games"]:
                 current_score, tennis = tennis_states.get(game["event"], ({}, None))
                 if not tennis or any(current_score.get(key) != game.get(key) for key in ("score_text", "period_text")):
-                    tennis = tennis_projection(game, game, now)
+                    # The venue can continue showing a match after its last score update.
+                    if game.get("league") not in ITF_LEAGUES or fresh_itf_score(game.get("score_utc"), ITF_SCORE_MAX_AGE):
+                        tennis = tennis_projection(game, game, now)
+                    else:
+                        tennis = None
                 live_games.append({**game, "tennis_projection": tennis} if tennis else game)
             halftime["live_games"] = live_games
         # A confirmed live/final transition invalidates stale pregame EV immediately.
@@ -236,10 +348,13 @@ class ScanState:
             coverage[key] = sum(game.get(key, 0) for game in games)
         halftime["picks"] = [pick for pick in halftime["picks"]
                              if -5 <= (now - utc(pick["quote_utc"])).total_seconds() <= BOOK_MAX_AGE]
+        if wcbb_settlement_error:
+            wcbb["warnings"] = [*wcbb["warnings"], wcbb_settlement_error]
         return {**snapshot, "catalog": catalog, "sports": sports, "stale": not observations,
                 "updated_utc": max(observations).isoformat() if observations else snapshot.get("updated_utc"),
                 "coverage": coverage, "games": games, "opportunities": ranked, "top_picks": picks,
-                "board": board, "halftime_paper": halftime,
+                "board": board, "halftime_paper": halftime, "pro_halftime": pro_snapshot_for_display(pro_halftime, now),
+                "wcbb_anytime": wcbb, "cs2": cs2_live_ev.read_for_display(cs2, now),
                 "warnings": sorted({warning for source in sources for warning in source.get("warnings", [])}),
                 "venue": "Polymarket CLOB (international)", "supported_markets": sorted(SCORING_MARKETS)}
 

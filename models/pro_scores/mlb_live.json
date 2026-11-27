@@ -1,0 +1,81 @@
+{
+  "version": "pro-live-moneyline-v1",
+  "league": "mlb",
+  "seasons": [
+    2023,
+    2024,
+    2025
+  ],
+  "train_games": 240,
+  "calibration_games": 240,
+  "weights": [
+    0.44209399274500816,
+    -0.03207310099781374,
+    0.32233935261291996,
+    0.08920134919072245
+  ],
+  "intercept": -0.12195065867690974,
+  "calibration_slope": 0.933015672616427,
+  "calibration_intercept": 0.0664275156142485,
+  "holdout": {
+    "games": 240,
+    "observations": 17613,
+    "brier": 0.1583660708158964,
+    "log_loss": 0.46994977676371624,
+    "score_only_brier": 0.16156573425006998,
+    "score_only_log_loss": 0.4792288568116092
+  },
+  "holdout_calibration_bins": [
+    {
+      "observations": 2276,
+      "predicted": 0.03247909506517507,
+      "observed": 0.028119507908611598
+    },
+    {
+      "observations": 1040,
+      "predicted": 0.1495585869020656,
+      "observed": 0.1326923076923077
+    },
+    {
+      "observations": 1169,
+      "predicted": 0.24996089861103069,
+      "observed": 0.21899059024807527
+    },
+    {
+      "observations": 1481,
+      "predicted": 0.3530670850094983,
+      "observed": 0.35178933153274816
+    },
+    {
+      "observations": 2144,
+      "predicted": 0.45648952427342926,
+      "observed": 0.4878731343283582
+    },
+    {
+      "observations": 3131,
+      "predicted": 0.5433124458271856,
+      "observed": 0.5477483232194187
+    },
+    {
+      "observations": 1444,
+      "predicted": 0.6481403269252525,
+      "observed": 0.6516620498614959
+    },
+    {
+      "observations": 1287,
+      "predicted": 0.7528391606537781,
+      "observed": 0.7785547785547785
+    },
+    {
+      "observations": 1335,
+      "predicted": 0.8527352951115263,
+      "observed": 0.8801498127340824
+    },
+    {
+      "observations": 2306,
+      "predicted": 0.9636519128416438,
+      "observed": 0.9657415437987857
+    }
+  ],
+  "requested_games_per_season": 240
+}

@@ -133,17 +133,53 @@ details > summary { color: var(--muted); font-size: .84rem; }
     <p class="feed" id="feed" role="status">Waiting for data</p>
   </header>
   <div class="toolbar">
-    <div class="tabs" id="phases" role="group" aria-label="Game phase">
+    <div class="tabs" id="phases" role="group" aria-label="Scanner views">
       <button type="button" data-phase="all" aria-pressed="true">All games</button>
       <button type="button" data-phase="live" aria-pressed="false">Live</button>
       <button type="button" data-phase="pregame" aria-pressed="false">Upcoming</button>
       <button type="button" data-phase="halftime" aria-pressed="false">Halftime rule</button>
+      <button type="button" data-phase="wcbb" aria-pressed="false">WCBB Anytime</button>
+      <button type="button" data-phase="cs2" aria-pressed="false">CS2 Live EV</button>
     </div>
     <label class="sr-only" for="sport">Sport or league</label>
     <select id="sport" class="control"><option value="">All leagues</option></select>
     <label class="sr-only" for="search">Find a game</label>
     <input id="search" class="control" type="search" placeholder="Find a team">
   </div>
+  <section class="panel" id="cs2-panel" aria-labelledby="cs2-heading" hidden>
+    <header class="list-header"><h2 id="cs2-heading">CS2 Live EV</h2><p>Polymarket US · Read-only</p></header>
+    <div class="section">
+      <p class="muted" id="cs2-sources"></p>
+      <p class="muted">Match-winner EV uses order-book depth within $5, a five-point probability haircut, estimated fees, and 1¢ per share in slippage.</p>
+    </div>
+    <div class="section">
+      <p class="muted" id="cs2-status" role="status">Waiting for the CS2 reader</p>
+      <ul class="alt-list" id="cs2-games"></ul>
+    </div>
+    <div class="section">
+      <details><summary>How CS2 win probability updates</summary>
+        <p class="muted">A published team Elo provides the starting estimate. The series model accounts for maps won and, when available, the verified round score. With an unconfirmed best-of format, the dashboard shows a range across compatible formats. The model uses a standard MR12 format and has no live calibration for map picks, side, economy, or players alive.</p>
+      </details>
+    </div>
+  </section>
+  <section class="panel" id="wcbb-panel" aria-labelledby="wcbb-heading" hidden>
+    <header class="list-header"><h2 id="wcbb-heading">Women’s College Basketball Anytime</h2><p>Paper bets</p></header>
+    <div class="section">
+      <p class="muted">First qualifying moneyline per game · Win probability above 60% · Screened EV at least 5% · 20¢ minimum ask · $5 all-in cap</p>
+      <p class="muted">Screen includes a five-point probability haircut, estimated fees, and 1¢ per share in slippage.</p>
+      <dl class="metrics" id="wcbb-performance"></dl>
+    </div>
+    <div class="section">
+      <div class="section-title"><h3>Live games</h3><p class="muted" id="wcbb-count"></p></div>
+      <p class="muted" id="wcbb-status" role="status">Waiting for the WCBB scan</p>
+      <ul class="alt-list" id="wcbb-games"></ul>
+    </div>
+    <div class="section">
+      <div class="section-title"><h3>Recent paper entries</h3></div>
+      <p class="muted" id="wcbb-empty">No paper entries yet.</p>
+      <ul class="alt-list" id="wcbb-entries"></ul>
+    </div>
+  </section>
   <section class="panel" id="halftime-panel" aria-labelledby="halftime-heading" hidden>
     <header class="list-header"><h2 id="halftime-heading">Halftime moneylines</h2><p id="halftime-count"></p></header>
     <p class="muted halftime-rule">$2 paper stake · 60% minimum model probability · +5% minimum screened EV after estimated fees</p>
@@ -153,6 +189,18 @@ details > summary { color: var(--muted); font-size: .84rem; }
     <details class="halftime-coverage" id="halftime-coverage" hidden>
       <summary id="halftime-coverage-label">Other live games</summary>
       <ul class="halftime-list" id="halftime-other"></ul>
+    </details>
+  </section>
+  <section class="panel" id="pro-halftime-panel" aria-labelledby="pro-halftime-heading" hidden>
+    <header class="list-header"><h2 id="pro-halftime-heading">MLB and NHL halftime</h2><p id="pro-halftime-mode"></p></header>
+    <p class="muted halftime-rule" id="pro-halftime-rule"></p>
+    <p class="muted halftime-rule">MLB · End of the fifth inning. NHL · Second intermission.</p>
+    <p class="placeholder" id="pro-halftime-status" role="status">Waiting for MLB and NHL data</p>
+    <ul class="halftime-list" id="pro-halftime-games"></ul>
+    <details class="halftime-coverage" id="pro-halftime-entries" open>
+      <summary id="pro-halftime-history">Recent paper entries</summary>
+      <p id="pro-halftime-empty" class="muted">No paper entries logged</p>
+      <ul class="halftime-list" id="pro-halftime-entry-list"></ul>
     </details>
   </section>
   <div class="workspace" id="standard-panel">
@@ -248,7 +296,8 @@ const seconds = (value, now) => Math.max(0, Math.floor(age(value, now) / 1000)) 
 const validSlug = /^[a-z0-9][a-z0-9-]*$/;
 
 let snapshot = {};
-let phase = 'all';
+const requestedPhase = new URLSearchParams(window.location.search).get('phase');
+let phase = ['halftime', 'wcbb', 'cs2'].includes(requestedPhase) ? requestedPhase : 'all';
 let chosen = '';
 let selectedGame = '';
 let listFingerprint = '';
@@ -258,6 +307,9 @@ let alternativesFingerprint = '';
 let warningsFingerprint = '';
 let halftimeFingerprint = '';
 let halftimeCoverageFingerprint = '';
+let proHalftimeFingerprint = '';
+let wcbbFingerprint = '';
+let cs2Fingerprint = '';
 let loading = false;
 let offline = false;
 const previousPrices = new Map();
@@ -323,6 +375,7 @@ function currentGames(now) {
 const HALFTIME_LABELS = {
   NBA:'NBA', NFL:'NFL', CBB:'Men’s college basketball', WCBB:'Women’s college basketball',
   CFB:'FBS college football', WNBA:'WNBA', ITFME:'ITF Men', ITFWO:'ITF Women',
+  MLB:'MLB', NHL:'NHL',
 };
 
 function halftimeLeague(game) {
@@ -332,7 +385,9 @@ function halftimeLeague(game) {
 
 function updateLeagueOptions(games) {
   const labels = [...games.values()].map(game => phase === 'halftime' ? halftimeLeague(game) : game.league);
-  const modeled = phase === 'halftime' ? snapshot.halftime_paper?.leagues || [] : [];
+  const modeled = phase === 'halftime' ? [
+    ...(snapshot.halftime_paper?.leagues || []), ...(snapshot.pro_halftime?.leagues || []).map(value => value.toUpperCase())
+  ] : [];
   const values = [...new Set([...modeled, ...labels].filter(Boolean))].sort();
   const key = JSON.stringify([phase === 'halftime', values]);
   if (key === leaguesFingerprint) return;
@@ -577,26 +632,253 @@ function renderHalftime(now, league, query, games) {
   }));
 }
 
+function renderProHalftime(now, league, query) {
+  const scan = snapshot.pro_halftime;
+  const current = !offline && fresh(scan?.updated_utc, now);
+  const live = Boolean(scan?.live_ordering);
+  const useLeague = value => !league || value.toUpperCase() === league;
+  text('pro-halftime-mode', live ? 'Real-money auto orders' : scan?.paper_logging ? 'Paper logging on' : 'Research preview');
+  text('pro-halftime-rule', '$' + Number(scan?.stake_cap || 10).toFixed(0) +
+    ' all-in cap · Win probability above 60% · Screened ROI strictly between 0% and 5%');
+  text('pro-halftime-history', live ? 'Recent real orders' : 'Recent paper entries');
+  text('pro-halftime-empty', live ? 'No real orders recorded' : 'No paper entries logged');
+  const rows = current ? (scan.scans || []).filter(row => useLeague(row.league)) : [];
+  const games = rows.flatMap(row => row.games || []).filter(
+    game => (game.title || game.event).toLowerCase().includes(query)
+  );
+  const status = [
+    ...(!current ? ['Waiting for fresh MLB and NHL data.'] : []),
+    ...(scan?.warning ? [scan.warning] : []),
+    ...rows.flatMap(row => {
+      const label = row.league.toUpperCase();
+      if (row.status === 'no_live_listings') {
+        return [row.next_start_et ? label + ' next start ' + proTipTime.format(new Date(row.next_start_et))
+          : label + ' has no live or upcoming listings.'];
+      }
+      if (row.status) return [label + ' · ' + readableStatus(row.status)];
+      return [];
+    }),
+  ];
+  if (current && rows.length && !games.length && !status.length) status.push('No games match the current filters.');
+  $('pro-halftime-status').hidden = !status.length;
+  text('pro-halftime-status', status.join(' · '));
+  const entries = (scan?.entries || []).filter(row => useLeague(row.league)
+    && [row.event, row.quote?.side].some(value => value?.toLowerCase().includes(query)));
+  const available = games.map(game => [game, Object.values(game.quotes || {}).filter(
+    quote => quote && age(quote.quote_utc, now) >= 0 && age(quote.quote_utc, now) <= 5000
+  )]);
+  const key = JSON.stringify([live, available, entries]);
+  if (key === proHalftimeFingerprint) return;
+  proHalftimeFingerprint = key;
+  $('pro-halftime-games').replaceChildren(...available.map(([game, quotes]) => {
+    const row = element('li', '');
+    row.append(element('h3', game.title || game.event),
+      element('p', [game.league.toUpperCase(), game.official?.score_away_home?.join('–'),
+        game.official?.period ? (game.league === 'mlb' ? 'Inning ' : 'Period ') + game.official.period : '',
+        readableStatus(game.halftime_live?.state || game.halftime_live?.status ||
+          game.halftime_paper?.status || game.pricing_status)].filter(Boolean).join(' · '), 'muted'));
+    if (game.win_probability) row.append(element('p',
+      'Away ' + pct(game.win_probability.away) + ' · Home ' + pct(game.win_probability.home) + ' win probability'));
+    for (const quote of quotes) row.append(element('p', [quote.side, price(Number(quote.limit)) + ' limit',
+      edge(quote.screened_ev) + ' screened ROI', '$' + Number(quote.total_estimate).toFixed(2) + ' cost'].join(' · ')));
+    return row;
+  }));
+  $('pro-halftime-empty').hidden = entries.length > 0;
+  $('pro-halftime-entry-list').replaceChildren(...entries.map(entry => {
+    const row = element('li', '');
+    row.append(element('p', entry.quote?.side || entry.event, 'selection'),
+      element('p', [entry.league.toUpperCase(), entry.event, proTipTime.format(new Date(entry.recorded_at)),
+        '$' + Number(entry.quote?.total_estimate).toFixed(2) + (live ? ' screened cost' : ' simulated cost'),
+        edge(entry.quote?.screened_ev) + ' screened ROI',
+        live ? readableStatus(entry.state) : '', live && entry.order_id ? 'Order ' + entry.order_id : '']
+        .filter(Boolean).join(' · '), 'muted'));
+    return row;
+  }));
+}
+
+const proTipTime = new Intl.DateTimeFormat(undefined, {weekday:'short', hour:'numeric', minute:'2-digit',
+  timeZone:'America/New_York', timeZoneName:'short'});
+const readableStatus = value => ({
+  outside_halftime_checkpoint:'Waiting for the halftime checkpoint',
+  outside_probability_or_roi_band:'Outside the entry thresholds',
+  paper_entry_logged:'Paper entry logged',
+  already_logged:'Paper entry already logged',
+  no_verified_halftime_quote:'Waiting for a verified halftime quote',
+  feed_unavailable:'Feed unavailable',
+  live_order_already_attempted:'Order attempt already recorded',
+  live_order_unknown:'Order state unknown',
+  pending:'Order state unknown',
+  unknown:'Order state unknown',
+  submitted:'Order accepted · Fill unconfirmed',
+})[value] || (value || '').replace(/^ORDER_STATE_/, '').replaceAll('_', ' ').toLowerCase();
+
+const wcbbStatus = {
+  unmatched_market: 'No matched US moneyline',
+  paper_entry_logged: 'Paper entry logged',
+  no_fresh_book: 'Waiting for a fresh US ask',
+  waiting_for_probability: 'Waiting for a matching ESPN win probability',
+  below_probability: 'Win probability at or below 60%',
+  below_price: 'Ask below 20¢',
+  insufficient_depth: 'Insufficient depth within $5 cap',
+  below_ev: 'Screened EV below 5%',
+  pricing_unavailable: 'Pricing feed unavailable',
+  state_changed: 'Score, clock, or quote changed during recheck',
+};
+const dollars = new Intl.NumberFormat('en-US', {style:'currency', currency:'USD'});
+const entryTime = new Intl.DateTimeFormat(undefined, {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
+
+function renderWcbb(now, query) {
+  const scan = snapshot.wcbb_anytime;
+  const current = !offline && fresh(scan?.updated_utc, now);
+  const matches = row => !query || (row.title + ' ' + (row.side || '')).toLowerCase().includes(query);
+  const games = current ? (scan.games || []).filter(matches).map(row => {
+    if (!row.quote_utc || age(row.quote_utc, now) <= 15000) return row;
+    return {...row, ask:null, screened_ev:null, probability:null,
+      status:row.status === 'paper_entry_logged' ? row.status : 'no_fresh_book'};
+  }) : [];
+  const entries = (scan?.entries || []).filter(matches);
+  const totals = scan?.performance || {};
+  const notice = offline ? 'Connection interrupted. Showing the last received paper ledger.'
+    : (scan?.warnings || []).join(' ') || (!current ? 'Waiting for the WCBB scan'
+      : games.length ? '' : (scan.games.length ? 'No live games match your search.' : 'No live WCBB games right now.'));
+  text('wcbb-status', notice);
+  $('wcbb-status').hidden = !notice;
+  text('wcbb-count', current ? games.length + ' shown' : '');
+  $('wcbb-empty').hidden = entries.length > 0;
+  text('wcbb-empty', (scan?.entries || []).length ? 'No entries match your search.' : 'No paper entries yet.');
+  const key = JSON.stringify([totals, games, entries]);
+  if (key === wcbbFingerprint) return;
+  wcbbFingerprint = key;
+  const money = value => Number.isFinite(value) ? dollars.format(value) : '—';
+  const wins = totals.wins || 0;
+  const settled = wins + (totals.losses || 0);
+  const record = [wins + '–' + (totals.losses || 0), totals.other ? totals.other + ' other' : ''].filter(Boolean).join(' · ');
+  const metrics = [['Record', record], ['Win rate', settled ? pct(wins / settled) : '—'],
+    ['Open entries', String(totals.open || 0)], ['Net paper P&L', money(totals.net_profit)],
+    ['Settled ROI', edge(totals.roi)], ['Max drawdown', money(totals.max_drawdown)]];
+  $('wcbb-performance').replaceChildren(...metrics.map(([label, value]) => {
+    const item = element('div', '', 'metric');
+    item.append(element('dt', label), element('dd', value));
+    return item;
+  }));
+  $('wcbb-games').replaceChildren(...games.map(game => {
+    const row = element('li', '');
+    const info = element('div', '');
+    info.append(element('p', game.title, 'selection'),
+      element('p', [game.score, game.checkpoint, game.clock, wcbbStatus[game.status]].filter(Boolean).join(' · '), 'muted'));
+    const numbers = element('div', '', 'numbers');
+    if (game.side) numbers.append(element('p', game.side));
+    if (Number.isFinite(game.probability)) numbers.append(element('small', 'Win probability ' + pct(game.probability)));
+    if (Number.isFinite(game.ask)) numbers.append(element('small', 'Best ask ' + price(game.ask)));
+    if (Number.isFinite(game.screened_ev)) numbers.append(element('small', 'Screened EV ' + edge(game.screened_ev)));
+    row.append(info, numbers);
+    return row;
+  }));
+  $('wcbb-entries').replaceChildren(...entries.map(entry => {
+    const row = element('li', '');
+    const info = element('div', '');
+    info.append(element('p', entry.side + ' moneyline', 'selection'),
+      element('p', [entry.title, entryTime.format(new Date(entry.recorded_at)), entry.checkpoint, entry.clock].filter(Boolean).join(' · '), 'muted'),
+      element('p', 'Win probability ' + pct(entry.probability) + ' · Screened EV ' + edge(entry.screened_ev), 'muted'));
+    const numbers = element('div', '', 'numbers');
+    numbers.append(element('p', [entry.result || 'Open', Number.isFinite(entry.pnl) ? money(entry.pnl) : ''].filter(Boolean).join(' · ')),
+      element('small', entry.quantity + ' shares at ' + price(Number(entry.limit)) + ' limit · ' + money(Number(entry.cost)) + ' all-in'));
+    row.append(info, numbers);
+    return row;
+  }));
+}
+
+const cs2Status = {
+  waiting_for_score: 'Waiting for a fresh series score',
+  format_or_score_unverified: 'Series format or score could not be verified',
+  rating_missing: 'No current Elo source covers both teams',
+  waiting_for_book: 'Waiting for a fresh book at the verified score',
+  book_unavailable: 'Order book unavailable',
+};
+
+function renderCs2(now, query) {
+  const scan = snapshot.cs2;
+  const current = !offline && fresh(scan?.updated_utc, now);
+  const games = current ? (scan.games || []).filter(row => row.title.toLowerCase().includes(query)) : [];
+  const sources = (scan?.rating_sources || []).map(source => source.name + ' · ' + tipTime.format(new Date(source.as_of)));
+  text('cs2-sources', [sources.length ? sources.join(' / ') : 'Waiting for dated team Elo',
+    scan?.round_feed ? 'Cito round feed configured' : 'Polymarket series score'].join(' · '));
+  const notices = [offline ? 'Connection interrupted' : !current ? 'Waiting for the CS2 reader'
+    : !games.length ? 'No live CS2 moneylines match this view.' : '', ...(scan?.warnings || [])].filter(Boolean);
+  text('cs2-status', notices.join(' '));
+  $('cs2-status').hidden = notices.length === 0;
+  const fingerprint = JSON.stringify(games);
+  if (fingerprint === cs2Fingerprint) return;
+  cs2Fingerprint = fingerprint;
+  const range = (lower, upper, format) => Number.isFinite(lower)
+    ? format(lower) + (upper - lower >= .001 ? ' to ' + format(upper) : '') : '—';
+  $('cs2-games').replaceChildren(...games.map(game => {
+    const item = element('li', '');
+    const info = element('div', '');
+    info.append(element('h3', game.title), element('p', [
+      game.period, game.maps ? 'Maps ' + game.maps.join('–') : '',
+      game.rounds ? 'Rounds ' + game.rounds.join('–') : '',
+      game.formats?.length ? game.formats.map(value => 'BO' + value).join('/') : '',
+      game.rating_source, cs2Status[game.status],
+    ].filter(Boolean).join(' · '), 'muted'));
+    const columns = element('div', '', 'quotes');
+    for (const side of game.sides) {
+      const data = element('div', '', 'quote');
+      data.append(element('h3', side.name));
+      const elo = (side.ratings || []).map(rating => rating.source + ' ' + rating.rating).join(' · ');
+      if (elo) data.append(element('p', elo, 'muted'));
+      data.append(element('p', 'Win probability ' + range(side.probability_low, side.probability_high, pct)),
+        element('p', 'Fair decimal odds ' + (side.probability_low > 0
+          ? range(1 / side.probability_high, 1 / side.probability_low, value => value.toFixed(2)) : '—')),
+        element('p', 'Best ask ' + price(side.ask)),
+        element('p', 'Screened EV ' + range(side.ev_low, side.ev_high, edge), side.ev_low > 0 ? 'edge' : ''));
+      columns.append(data);
+    }
+    item.append(info, columns);
+    return item;
+  }));
+}
+
 function render() {
   const now = Date.now();
-  const timestamps = phase === 'halftime' ? [snapshot.halftime_paper?.updated_utc]
+  const timestamps = phase === 'cs2' ? [snapshot.cs2?.updated_utc]
+    : phase === 'wcbb' ? [snapshot.wcbb_anytime?.updated_utc]
+    : phase === 'halftime' ? [snapshot.halftime_paper?.updated_utc, snapshot.pro_halftime?.updated_utc]
     : [snapshot.updated_utc, ...(snapshot.board || []).flatMap(game =>
     [game.phase === 'live' ? game.score_utc : null, ...game.moneyline_quotes.map(row => row.quote_utc)])];
   const live = !offline && timestamps.some(value => fresh(value, now));
   $('feed').dataset.live = String(live);
   const updated = Math.max(...timestamps.filter(value => fresh(value, now)).map(Date.parse));
   text('feed', offline ? 'Connection interrupted' : live ? 'Updated ' + clockTime.format(new Date(updated)) : 'Waiting for fresh data');
+  const wcbb = phase === 'wcbb';
+  const cs2 = phase === 'cs2';
+  $('sport').hidden = wcbb || cs2;
+  $('cs2-panel').hidden = !cs2;
+  $('wcbb-panel').hidden = !wcbb;
+  $('standard-panel').hidden = wcbb || cs2 || phase === 'halftime';
+  $('halftime-panel').hidden = phase !== 'halftime';
+  $('pro-halftime-panel').hidden = phase !== 'halftime';
+  const query = $('search').value.trim().toLowerCase();
+  if (cs2) {
+    renderCs2(now, query);
+    return;
+  }
+  if (wcbb) {
+    renderWcbb(now, query);
+    return;
+  }
   const games = currentGames(now);
   const halftimeGames = phase === 'halftime' && fresh(snapshot.halftime_paper?.updated_utc, now)
     && Array.isArray(snapshot.halftime_paper.live_games)
     ? new Map(snapshot.halftime_paper.live_games.map(game => [game.event, game])) : games;
   updateLeagueOptions(halftimeGames);
-  const query = $('search').value.trim().toLowerCase();
   const league = $('sport').value;
-  $('standard-panel').hidden = phase === 'halftime';
-  $('halftime-panel').hidden = phase !== 'halftime';
+  const proLeague = ['MLB', 'NHL'].includes(league);
+  $('halftime-panel').hidden = phase !== 'halftime' || proLeague;
+  $('pro-halftime-panel').hidden = phase !== 'halftime' || Boolean(league && !proLeague);
   if (phase === 'halftime') {
-    renderHalftime(now, league, query, halftimeGames);
+    if (!proLeague) renderHalftime(now, league, query, halftimeGames);
+    if (!league || proLeague) renderProHalftime(now, league, query);
     return;
   }
   const phases = {live:0, pregame:1, unknown:2, final:3};
@@ -797,8 +1079,12 @@ $('games').addEventListener('click', event => {
   render();
   if (window.matchMedia('(max-width: 700px)').matches) $('game-title').focus();
 });
+for (const tab of $('phases').querySelectorAll('button')) {
+  tab.setAttribute('aria-pressed', String(tab.dataset.phase === phase));
+}
 refresh();
 setInterval(refresh, 5000);
+setInterval(() => { if (phase === 'cs2') refresh(); }, 2000);
 setInterval(render, 1000);
 </script>
 </body>

@@ -1,5 +1,6 @@
 from datetime import timedelta
 from decimal import Decimal
+import json
 from threading import Event
 from types import SimpleNamespace
 
@@ -47,15 +48,180 @@ def test_verified_itf_match_and_capped_fill_or_kill(monkeypatch):
     _, _, stressed = wager.match_selection(event, early, score_based=True)
     assert stressed["displayed_probability"] == .75
     assert stressed["probability"] == pytest.approx(.68)
-    stream = wager.BookStream(market["slug"], None, Event())
-    stream.snapshot = book, wager.now()
+    stream = wager.BookStream(None, Event())
+    stream.set_markets([market["slug"]])
+    stream.snapshots[market["slug"]] = book, wager.now()
     monkeypatch.setattr(wager, "public", lambda *args, **kwargs: pytest.fail("unexpected HTTP price request"))
     candidate = ("game", early, event)
     assert wager.price_candidate(candidate, Decimal("2"), stream)[4]["assumed_unseen_points"] == 1
-    stream.snapshot = book, wager.now() - timedelta(seconds=1)
-    assert wager.price_candidate(candidate, Decimal("2"), stream) is None
-    stream.snapshot = {**book, "transactTime": (wager.now() - timedelta(seconds=4)).isoformat()}, wager.now()
-    assert wager.price_candidate(candidate, Decimal("2"), stream) is None
+    stream.snapshots[market["slug"]] = book, wager.now() - timedelta(seconds=1)
+    diagnostic = {}
+    assert wager.price_candidate(candidate, Decimal("2"), stream, diagnostic=diagnostic) is None
+    assert diagnostic["reason"] == "book_received_before_score"
+    stream.snapshots[market["slug"]] = (
+        {**book, "transactTime": (wager.now() - timedelta(seconds=4)).isoformat()}, wager.now(),
+    )
+    diagnostic = {}
+    assert wager.price_candidate(candidate, Decimal("2"), stream, diagnostic=diagnostic) is None
+    assert diagnostic["reason"] == "stale_or_invalid_book_timestamp"
+
+    diagnostic = {}
+    assert wager.order_for_stake({**pick, "probability": .55}, market, long, book, Decimal("2"),
+                                 diagnostic=diagnostic) is None
+    assert diagnostic["reason"] == "roi_below_floor"
+    assert Decimal(diagnostic["limit"]) == Decimal(".50")
+    assert diagnostic["screened_roi"] < diagnostic["minimum_roi"]
+
+    diagnostic = {}
+    assert wager.order_for_stake(pick, market, long, {**book, "offers": []}, Decimal("2"),
+                                 diagnostic=diagnostic) is None
+    assert diagnostic["reason"] == "no_executable_quote"
+
+    stream.snapshots.clear()
+    request_paths = []
+    def fresh_book(path, **kwargs):
+        request_paths.append((path, kwargs))
+        return {"marketData": {**book, "bids": [], "transactTime": wager.now().isoformat()}}
+
+    monkeypatch.setattr(wager, "public", fresh_book)
+    refreshed = wager.price_candidate(candidate, Decimal("2"), stream, refresh_book=True)
+    assert refreshed[4]["book_source"] == "rest_refresh"
+    assert wager.price_candidate(candidate, Decimal("2"), stream, refresh_book=True)
+    assert request_paths == [(f"/v1/markets/{market['slug']}/book", {"fresh_book": True})]
+
+
+def test_book_refresh_rejects_stale_exchange_timestamp_and_limits_retries(monkeypatch):
+    clock = wager.now()
+    monkeypatch.setattr(wager, "now", lambda: clock)
+    market = "aec-itfme-example"
+    score = {"score_utc": (clock - timedelta(seconds=4)).isoformat(), "score_received_at": clock.isoformat()}
+    stream = wager.BookStream(None, Event())
+    stream.set_markets([market])
+    calls = []
+    def public(path, *, fresh_book):
+        calls.append(path)
+        return {"marketData": {
+            "marketSlug": market, "state": "MARKET_STATE_OPEN", "bids": [], "offers": [],
+            "transactTime": (clock - timedelta(seconds=5)).isoformat(),
+        }}
+
+    monkeypatch.setattr(wager, "public", public)
+    diagnostic = {}
+    assert stream.refresh_after(market, score, diagnostic=diagnostic) is None
+    assert diagnostic == {"reason": "stale_or_invalid_book_timestamp", "book_age_seconds": 5.0}
+    assert stream.refresh_after(market, score) is None
+    assert stream.refresh_after(market, {**score, "score_utc": (clock - timedelta(seconds=21)).isoformat()}) is None
+    assert len(calls) == 1
+
+
+def test_status_diagnostics_distinguish_stale_missing_and_pricing_rejections(monkeypatch, capsys):
+    clock = wager.now()
+    monkeypatch.setattr(wager, "now", lambda: clock)
+    events = {
+        slug: {"slug": slug, "live": True} for slug in ("itfme-stale", "itfme-missing", "itfme-priced")
+    }
+    scores = wager.Scores()
+    scores.games["itfme-stale"] = {"score_utc": (clock - timedelta(seconds=25)).isoformat()}
+    wager.report_diagnostics(events, scores, [("itfme-priced", {})],
+                             [("itfme-priced", {}, events["itfme-priced"])],
+                             {"itfme-priced": {"reason": "missing_elo_rating"}}, {"missing_elo_rating": 2})
+    output = json.loads(capsys.readouterr().out)
+    assert output["matches"] == {
+        "itfme-stale": {"reason": "stale_score", "score_age_seconds": 25.0},
+        "itfme-missing": {"reason": "no_usable_us_score"},
+        "itfme-priced": {"reason": "missing_elo_rating"},
+    }
+    assert output["pricing_skips_since_last_status"] == {"missing_elo_rating": 2}
+
+
+def test_stream_catalog_discovers_live_and_near_start_singles_in_both_leagues(monkeypatch):
+    clock = wager.now()
+
+    def event(slug, minutes, live=False, title="Player A vs. Player B", **details):
+        return {
+            "slug": slug, "title": title, "live": live, "active": True, "closed": False,
+            "startTime": (clock + timedelta(minutes=minutes)).isoformat(),
+            "markets": [{"slug": f"aec-{slug}", "marketType": "moneyline",
+                         "sportsMarketType": "tennis_match_winner", "active": True, "closed": False}],
+            **details,
+        }
+
+    a = event("itfme-live", -60, live=True)
+    b = event("itfwo-upcoming", 10)
+    pages = {
+        "itfme": [a, event("itfme-finished", -5, ended=True), event("itfme-distant", 90)],
+        "itfwo": [b, event("itfwo-doubles", 5, title="A - B vs. C - D")],
+    }
+    monkeypatch.setattr(wager, "now", lambda: clock)
+    def public(path, *, fresh_score):
+        assert fresh_score
+        return {"events": pages[path.split("/")[3]]}
+
+    monkeypatch.setattr(wager, "public", public)
+    assert wager.stream_catalog() == {
+        a["slug"]: {**a, "score_received_at": clock}, b["slug"]: {**b, "score_received_at": clock},
+    }
+
+
+def test_us_score_uses_provider_timestamp_and_explicit_side_order(monkeypatch):
+    clock = wager.now()
+    monkeypatch.setattr(wager, "now", lambda: clock)
+    source_time = (clock - timedelta(seconds=4)).isoformat()
+    slug = "itfme-one-two"
+    event = {
+        "slug": slug, "title": "One vs. Two", "live": True, "active": True, "closed": False,
+        "eventState": {"type": "tennis", "live": True, "score": "3-1:30-15", "period": "S1",
+                       "updatedAt": source_time},
+        "markets": [{"slug": f"aec-{slug}", "marketType": "moneyline",
+                     "sportsMarketType": "tennis_match_winner", "active": True, "closed": False,
+                     "marketSides": [{"team": {"ordering": "away", "abbreviation": "two"}},
+                                     {"team": {"ordering": "home", "abbreviation": "one"}}]}],
+    }
+    first = wager.us_score(event, clock - timedelta(seconds=2))
+    assert first["score_columns"] == ["one", "two"]
+    assert first["score_utc"] == source_time
+    scores = wager.Scores()
+    scores.publish(slug, first)
+    scores.publish(slug, wager.us_score(event, clock))
+    assert scores.get(slug) == first | {"first_set_break_utc": None}
+    assert len(scores.active_games()) == 1
+
+    market = f"aec-{slug}"
+    book = {"marketSlug": market, "state": "MARKET_STATE_OPEN", "bids": [], "offers": [],
+            "transactTime": (clock - timedelta(seconds=1)).isoformat()}
+    stream = wager.BookStream(None, Event())
+    stream.set_markets([market])
+    stream.snapshots[market] = (book, clock - timedelta(seconds=3))
+    assert stream.usable_after(market, first) is None
+    stream.publish(stream.markets, book)
+    assert stream.usable_after(market, first)
+
+    monkeypatch.setattr(wager, "now", lambda: clock + timedelta(seconds=30))
+    scores.publish(slug, wager.us_score(event, wager.now()))
+    assert scores.active_games() == []
+    event["eventState"].pop("updatedAt")
+    assert wager.us_score(event, wager.now()) is None
+
+
+def test_stream_keeps_separate_books_and_rejects_retired_subscriptions():
+    first, second, third = "aec-itfme-a", "aec-itfwo-b", "aec-itfwo-c"
+    stream = wager.BookStream(None, Event())
+    score = {"score_utc": wager.now().isoformat()}
+    book = {"state": "MARKET_STATE_OPEN", "bids": [], "offers": [], "transactTime": score["score_utc"]}
+    initial = frozenset((first, second))
+    stream.set_markets(initial)
+    for slug in initial:
+        stream.publish(initial, {**book, "marketSlug": slug})
+        assert stream.usable_after(slug, score)[0]["marketSlug"] == slug
+    stream.publish(initial, {**book, "marketSlug": first, "state": "MARKET_STATE_CLOSED"})
+    assert stream.usable_after(first, score) is None
+    assert stream.usable_after(second, score)
+    updated = frozenset((second, third))
+    stream.set_markets(updated)
+    stream.publish(initial, {**book, "marketSlug": second})
+    assert stream.usable_after(second, score) is None
+    stream.publish(updated, {**book, "marketSlug": third})
+    assert stream.usable_after(third, score)
 
 
 @pytest.mark.parametrize(("score", "period", "expected"), [

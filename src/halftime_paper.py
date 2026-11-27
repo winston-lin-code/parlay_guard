@@ -19,6 +19,7 @@ from .halftime_basketball_model import HALF_PERIOD, load_models, win_probability
 from .nfl_inplay_model import forecast as nfl_forecast, load as load_nfl
 from .nfl_inplay_scan import NFL_SCOREBOARD
 from .predict_today import ET
+from .tennis_live import ITF_LEAGUES
 from .us_wager import BOOK_MAX_AGE, CENT, GATEWAY, ONE, SLUG, STANDARD_FEE, WagerError, contract_url, decimal, name, public, team_names
 
 PAPER_STAKE = Decimal("2")
@@ -213,12 +214,21 @@ def contract_and_sides(game):
     return None
 
 
-def live_inventory():
+def live_inventory(league_filter=None, *, start_window=None):
+    from .tennis_wager import us_score
+
     listings = {league: {} for league in OTHER_SCOREBOARDS}
     live_games = {}
     offset = 0
     while True:
-        params = {"active": "true", "closed": "false", "live": "true", "limit": 100, "offset": offset}
+        params = {"active": "true", "closed": "false", "limit": 100, "offset": offset}
+        if start_window is None:
+            params["live"] = "true"
+        else:
+            earliest, latest = start_window
+            params.update(startDateMin=earliest.isoformat(), startDateMax=latest.isoformat())
+        if league_filter:
+            params["tagSlug"] = league_filter.lower()
         try:
             page = read_json("GET", f"{GATEWAY}/v1/events", max_age=MAX_AGE, params=params)
         except (requests.ConnectionError, requests.Timeout):
@@ -227,18 +237,34 @@ def live_inventory():
         for event in events:
             slug = event.get("slug") or ""
             league = slug.split("-", 1)[0].upper()
-            if event.get("ended") or event.get("live") is not True or not SLUG.fullmatch(slug):
+            is_live = event.get("live") is True
+            if (event.get("ended") or not SLUG.fullmatch(slug)
+                    or (league_filter and league != league_filter)):
+                continue
+            if not is_live and start_window is None:
                 continue
             title = str(event.get("title") or "").strip()
-            if title and len(event.get("teams") or []) >= 2:
+            if is_live and title and len(event.get("teams") or []) >= 2:
                 live_games[slug] = {"event": slug, "league": league, "title": title, "phase": "live",
                                     "score_text": str(event.get("score") or ""),
                                     "period_text": str(event.get("period") or "")}
+                if league in ITF_LEAGUES and (state := us_score(event, datetime.now(timezone.utc))):
+                    columns = state["score_columns"]
+                    participants = {name(team.get("abbreviation")): team.get("name") for team in event["teams"]}
+                    labels = [participants.get(name(column)) for column in columns]
+                    if all(labels):
+                        state["score_order"] = " / ".join(labels)
+                    live_games[slug].update(state)
             if league not in listings:
                 continue
             for market in event.get("markets") or []:
-                if market.get("slug") == f"aec-{slug}":
-                    listings[league][slug] = market
+                if market.get("slug") != f"aec-{slug}":
+                    continue
+                if start_window is not None:
+                    listed = utc(market.get("gameStartTime"))
+                    if listed is None or not earliest <= listed < latest:
+                        continue
+                listings[league][slug] = market
         if len(events) < 100:
             break
         offset += len(events)

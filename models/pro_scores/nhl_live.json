@@ -1,0 +1,80 @@
+{
+  "version": "pro-live-moneyline-v1",
+  "league": "nhl",
+  "seasons": [
+    2023,
+    2024,
+    2025
+  ],
+  "train_games": 178,
+  "calibration_games": 177,
+  "weights": [
+    0.5023276984188506,
+    0.12530549097495977,
+    0.0
+  ],
+  "intercept": -0.016451648692266167,
+  "calibration_slope": 1.492016785406737,
+  "calibration_intercept": -0.09261602965579092,
+  "holdout": {
+    "games": 183,
+    "observations": 10797,
+    "brier": 0.16721538550768167,
+    "log_loss": 0.49259259190332355,
+    "score_only_brier": 0.17201623286587217,
+    "score_only_log_loss": 0.5094968133607919
+  },
+  "holdout_calibration_bins": [
+    {
+      "observations": 1298,
+      "predicted": 0.033764563337483816,
+      "observed": 0.028505392912172575
+    },
+    {
+      "observations": 655,
+      "predicted": 0.1502298322694142,
+      "observed": 0.1099236641221374
+    },
+    {
+      "observations": 985,
+      "predicted": 0.2592552406826272,
+      "observed": 0.25583756345177666
+    },
+    {
+      "observations": 470,
+      "predicted": 0.3151408653975652,
+      "observed": 0.4021276595744681
+    },
+    {
+      "observations": 1441,
+      "predicted": 0.4861940840180017,
+      "observed": 0.4455239417071478
+    },
+    {
+      "observations": 1983,
+      "predicted": 0.5101839073253276,
+      "observed": 0.4952092788703984
+    },
+    {
+      "observations": 185,
+      "predicted": 0.6976413285788057,
+      "observed": 0.6324324324324324
+    },
+    {
+      "observations": 1526,
+      "predicted": 0.7332493480284901,
+      "observed": 0.6572739187418086
+    },
+    {
+      "observations": 647,
+      "predicted": 0.8585596566383298,
+      "observed": 0.8500772797527048
+    },
+    {
+      "observations": 1606,
+      "predicted": 0.9684606279821337,
+      "observed": 0.9489414694894147
+    }
+  ],
+  "requested_games_per_season": 192
+}

@@ -214,24 +214,241 @@ updates, and a score stream with missing identities or stale data is skipped.
 
 #### Streamed score-based paper mode
 
-Choose one ITF singles event. Copy its event slug from the Polymarket US
-listing. Start the runner before the match to connect the full order book in
-advance. In your local, git-ignored `.env` file set `POLYMARKET_US_KEY_ID`
+The runner discovers live ITF men's and women's singles on Polymarket US
+and looks up upcoming matches every five seconds by default, starting book subscriptions
+up to 15 minutes before their scheduled starts. In your local, git-ignored
+`.env` file set `POLYMARKET_US_KEY_ID`
 and `POLYMARKET_US_SECRET_KEY` for the read-only book subscription. On Windows
 install `tzdata` if the Eastern time zone is unavailable.
 
 ```powershell
 python -m pip install -r requirements.txt cryptography tzdata
-python -m src.tennis_wager --stream-event YOUR_ITF_EVENT_SLUG --env-file .env --stake 2 --db data/paper_trades/tennis_stream.sqlite3
+python -m src.tennis_wager --stream-all --env-file .env --stake 2 --db data/paper_trades/tennis_stream.sqlite3
 ```
 
-The runner evaluates any supported point score and wakes up on score and
-book updates. A paper entry uses an open full book received after the score
-and an exchange book timestamp at most three seconds old. It skips scores
+`--stream-event YOUR_ITF_EVENT_SLUG` selects a single match when needed.
+The runner checks timestamped US point scores on each poll and wakes up on
+book updates. A paper entry needs a score updated by the provider within
+20 seconds, an open full book received after the score, and an exchange book
+timestamp at most three seconds old. A repeat poll of the same score does not
+reset its age. It skips scores
 without an explicit point count, unsupported formats, and states where an
 unseen point could already end the match. It prices both possible next points
 and uses the lowest win probability across them and the displayed score.
 The 60% floor, five-point probability haircut, 5% fee-adjusted ROI threshold,
 and one-entry-per-event ledger still apply. The one-point assumption is a
-paper stress test. Local receipt timestamps cannot establish how far the
-score feed trails the court. This mode is paper-only.
+paper stress test. The US score timestamp shows when the provider updated
+its feed. The time from the actual point to that update remains unknown.
+This mode is paper-only.
+
+Add `--explain` to print a JSON diagnostic with each status line. It
+shows the last pricing decision for each live match with a fresh score and
+counts the pricing checks that failed since the previous status line. A
+stale score entry includes its age. An ROI rejection includes the best
+fee-adjusted ROI the runner found within the stake.
+
+Add `--refresh-book` to request a full REST snapshot once per qualifying
+score update when the streamed book is unusable. The snapshot still needs an
+open market and an exchange timestamp at most three seconds old. The
+`book_source` field identifies the source of any logged paper entry.
+`--interval 3` sets the fastest supported score poll. The source score age,
+one-point check, Elo requirement, and price filters apply with both options.
+
+#### Compare score feeds
+
+Use the read-only probe during live ITF singles. It prompts for a separate
+[Live Tennis API key](https://livetennisapi.com/subscribe/free) when
+`LIVE_TENNIS_API_KEY` is unset. The default run uses 60 REST requests over
+about five minutes. Check the provider's daily quota before repeating it.
+
+```powershell
+python -m src.tennis_score_probe --samples 60 --interval 5
+```
+
+The probe pairs uniquely matched players and scheduled start times, then
+compares when the same score first reached your computer from each feed.
+Positive `median_alternate_lead_seconds` means the alternate feed arrived
+first at that polling cadence. The report also counts coverage, timestamps
+within 20 seconds, and older alternate states recently confirmed by the
+provider. Scores already visible at startup are excluded from the lead
+calculation. The comparison measures feed arrival, and the time of the
+point on court remains unknown. The probe leaves the wagering runner's
+score source untouched.
+
+### MLB and NHL live score verification
+
+Compare live Polymarket US listings with MLB Stats API and NHL Gamecenter
+data. The verifier matches the two teams and scheduled start, then reports
+score and phase agreement. MLB adds inning half, outs, and the last completed
+play timestamp. NHL adds period, clock, and intermission status. Source and
+receipt timestamps are shown together when supplied. NHL public scoreboard
+responses give the game clock, so the official wall-clock age is unknown.
+
+```powershell
+python -m src.pro_live_scores --watch
+```
+
+Omit `--watch` for one poll or select a league with `--leagues nhl` or
+`--leagues mlb`. To verify a particular past listing, use
+`--event nhl-wpg-bos-2026-11-25`. The verifier reads public endpoints and
+reports differences, including cases where the score agrees but a phase
+cannot be confirmed.
+
+### MLB and NHL in-game moneyline EV
+
+Start the full live dashboard and the MLB and NHL halftime paper scanner
+from the repository root.
+
+```powershell
+python -m src.run_research
+```
+
+Open [the live dashboard](http://127.0.0.1:8000/) or jump directly to
+[the Halftime tab](http://127.0.0.1:8000/inplay?phase=halftime#pro-halftime-panel).
+The Halftime tab shows current win probabilities when supported, verified
+quotes at the checkpoint, upcoming starts, and recent paper entries from
+`data/paper_trades/pro_halftime.sqlite3`. Paper is the default mode.
+The built-in scanner uses the same rule and ledger as
+the standalone `--paper-halftime` command below. Use one runner per checkout.
+
+To enable automatic real-money orders for MLB and NHL, set
+`POLYMARKET_US_KEY_ID` and `POLYMARKET_US_SECRET_KEY` in the project's
+git-ignored `.env` file or in the environment, then start the dashboard
+with `--live-halftime`.
+
+```powershell
+python -m src.run_research --live-halftime
+```
+
+Live mode applies the same halftime rule with a $5 all-in cap per game.
+It sends a fill-or-kill limit order at the verified executable price and
+screens EV with the existing fee estimate, 1¢ per share in slippage, and
+five-point probability haircut. If the full order cannot fill at its limit,
+the exchange cancels it. Because orders use whole shares, actual spend may
+be below $5. The Halftime tab shows the exchange order status and ID when
+available. Keep `data/live_orders/pro_halftime.sqlite3` between runs so the
+scanner does not repeat an attempt for the same game, even after a timeout.
+Press Ctrl+C to stop the runner.
+
+To inspect the running dashboard, open a second PowerShell window in the
+repository and run the status check. It uses the local HTTP API and reports
+scanner freshness, NHL/MLB order mode, league status, and the latest ledger
+entry when available. Pass `--port` if your server uses a different port.
+
+```powershell
+python -m src.check_local_server
+```
+
+NBA forecasts and player props require the local NBA history and model
+artifacts used by the regular dashboard. Keep those files when updating
+the checkout.
+
+Run the moneyline EV scanner on its own from the terminal.
+
+```powershell
+python -m src.pro_live_ev --watch --stake 2 --slippage .01
+```
+
+The runner reports both teams' win probabilities, executable limits for the
+available depth, estimated net ROI, and screened ROI after a five-point
+probability haircut. The default screen requires at least 5% screened ROI.
+The paper stake caps estimated cost, including fees and slippage. Pricing
+requires agreement between the official and Polymarket US states, an open
+moneyline with the right settlement terms, and a book at most five seconds
+old. A changed score or phase during the quote check blocks EV output. Within
+an MLB half inning, the two feeds must also agree on outs and base occupancy.
+This runner reads public data and prints paper estimates.
+
+When there are no live listings, the runner shows the next scheduled start
+in Eastern time when available. Watch mode reports an unchanged idle status
+once a minute and continues checking for newly live listings between updates.
+
+Use `--paper-halftime` to log at most one simulated moneyline entry per
+game at the end of MLB's fifth inning or NHL's second intermission. This
+mode requires a modeled win probability strictly above 60% and a screened
+ROI strictly between 0% and 5%. Its default stake cap is $10. It writes
+qualifying entries to `data/paper_trades/pro_halftime.sqlite3`.
+
+```powershell
+python -m src.pro_live_ev --watch --paper-halftime --stake 10 --slippage .01
+```
+
+To run the any-time high-EV rule on current NHL and MLB games with paper
+stakes, use the public live feeds. No historical input files are needed.
+
+```powershell
+python -m src.pro_live_ev --watch --paper-any-high-ev --stake 5
+```
+
+The runner records the first qualifying entry per game at a supported
+live game state. It requires win probability above 60% and screened ROI
+of at least 5% after fees, the five-point haircut, and 1¢ per share in
+slippage. In the output, `any_high_ev_paper.status` reports the decision.
+Qualifying entries are saved to `data/paper_trades/pro_any_high_ev.sqlite3`.
+This ledger records entry quotes for forward testing and does not settle
+games or produce an ROI report.
+
+For a historical replay, use timestamped score-verifier
+JSONL and native order-book recordings or PMData Polymarket US L2 Parquet.
+On Windows, collect score-verifier output with
+`python -m src.pro_live_scores --watch | Out-File -Encoding utf8 scores.jsonl`.
+Install `pyarrow` when reading Parquet. The settlement CSV uses this header:
+
+```text
+event,league,official_game_id,home_long,winner,settled_at,tick,fee_coefficient,minimum_quantity
+```
+
+Use verified historical market terms including which team was long
+(`home_long` is 1 for home and 0 for away), and the expected dollar or
+zero settlement (`winner` is `home` or `away`). Use an offset-bearing UTC
+timestamp for `settled_at`. Exclude voids and other nonbinary settlements.
+
+```powershell
+python -m src.pro_halftime_backtest --states scores.jsonl --settlements settlements.csv --books books.parquet --output results/pro-halftime
+```
+
+To compare the first qualifying entry at any supported game state with the
+halftime-only rule, use the same input files and a $5 all-in cap in both replays.
+
+```powershell
+python -m src.pro_halftime_backtest --window compare --stake 5 --states scores.jsonl --settlements settlements.csv --books books.parquet --output results/pro-timing
+```
+
+This writes separate `any` and `halftime` reports using the same fixtures.
+Each report includes verified game coverage and executable book coverage.
+To test first entry at a higher edge, add `--high-ev`. This requires at
+least 5% screened ROI and keeps the above-60% win probability cutoff.
+The replay requires two agreeing score observations in the entry window. It uses
+an open full book received between those observations and priced within
+five seconds of the recheck. It writes one simulated trade per official
+game, with win rate, spend, P&L, ROI and settled-equity drawdown in
+`summary.csv`. Display prices and score event times without receipt
+timestamps provide insufficient input for this replay.
+
+The MLB model uses score, inning, batting side, outs and base occupancy in
+standard nine-inning games, including inning breaks. Historical within-inning
+states come from completed plate appearances. The model groups live states
+with the same score, inning, outs and runners regardless of pitch count or
+player identity. The NHL model uses score and remaining regulation time,
+including intermissions and excluding the final 60 seconds. Its outcome
+includes overtime or shootout wins where applicable. Extra innings and NHL
+overtime are outside the forecasted state coverage.
+
+| 2025 holdout | Games | States | Brier | Score-only Brier |
+|---|---:|---:|---:|---:|
+| MLB | 240 | 17,613 | 0.1584 | 0.1616 |
+| NHL | 183 | 10,797 | 0.1672 | 0.1720 |
+
+Season partitions are 2023 for training, 2024 for calibration, and 2025 for
+holdout. NHL seasons use the ending year. Three NHL season samples requested
+192 games each and 38 requests failed. Results use only games whose official
+scores and historical states could be reconstructed. Forecasts were compared
+against actual game winners. Historical executable odds were unavailable for
+this test, so realized trading ROI remains unmeasured.
+
+To rebuild the artifacts from league feeds:
+
+```sh
+python -m src.train_pro_inplay mlb --cache data/pro_live_cache
+python -m src.train_pro_inplay nhl --cache data/pro_live_cache
+```
