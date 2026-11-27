@@ -800,8 +800,14 @@ function renderCs2(now, query) {
   const scan = snapshot.cs2;
   const current = !offline && fresh(scan?.updated_utc, now);
   const games = current ? (scan.games || []).filter(row => row.title.toLowerCase().includes(query)) : [];
-  const sources = (scan?.rating_sources || []).map(source => source.name + ' · ' + tipTime.format(new Date(source.as_of)));
-  text('cs2-sources', [sources.length ? sources.join(' / ') : 'Waiting for dated team Elo',
+  const ratingDate = new Intl.DateTimeFormat('en-US', {month:'short', day:'numeric', year:'numeric', timeZone:'UTC'});
+  const sources = (scan?.rating_sources || []).map(source => [
+    source.name, ratingDate.format(new Date(source.as_of)), source.teams + ' teams',
+    {cache:'Saved snapshot', bundled:'Bundled snapshot'}[source.origin],
+  ].filter(Boolean).join(' · '));
+  text('cs2-sources', [sources.length ? sources.join(' / ')
+    : (scan?.warnings?.some(warning => /provider|ranking/.test(warning))
+      ? 'Dated team Elo unavailable' : 'Fetching dated team Elo'),
     scan?.round_feed ? 'Cito round feed configured' : 'Polymarket series score'].join(' · '));
   const notices = [offline ? 'Connection interrupted' : !current ? 'Waiting for the CS2 reader'
     : !games.length ? 'No live CS2 moneylines match this view.' : '', ...(scan?.warnings || [])].filter(Boolean);

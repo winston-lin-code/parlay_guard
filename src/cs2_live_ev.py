@@ -10,7 +10,8 @@ import time
 
 import requests
 
-from .cs2_ratings import MAX_RATING_AGE, analyzer_ratings, fragcharts_ratings, predict_ratings, team_key
+from . import cs2_ratings
+from .cs2_ratings import analyzer_ratings, fragcharts_ratings, predict_ratings, team_key
 from .env_config import env_value
 from .inplay_scan import PROBABILITY_HAIRCUT, read_json, utc
 from .pro_live_ev import best_paper_quote
@@ -21,6 +22,7 @@ SCORE_AGE = 120
 ROUND_AGE = 20
 PRICE_INTERVAL = 5
 RATING_INTERVAL = 30 * 60
+RATING_RETRY_INTERVAL = 2 * 60
 CITO_INTERVAL = 8
 REFERENCE_SIZE = Decimal("5")
 SLIPPAGE = Decimal(".01")
@@ -260,6 +262,10 @@ def evaluate(match, ratings, cito_rows, key):
     row = {"event": match["event"], "title": match["title"], "period": match["period"], "maps": match["maps"],
            "status": "waiting_for_score", "scores_at": match["score_at"].isoformat() if match["score_at"] else None,
            "sides": [{"name": label} for label in match["names"]]}
+    team_keys = tuple(team_key(label) for label in match["names"])
+    for side, team in zip(row["sides"], team_keys):
+        side["ratings"] = [{"source": source.name, "rating": source.teams[team]}
+                           for source in ratings if team in source.teams]
     reference = now()
     outcome = None
     maps, rounds, map_number = match["maps"], None, match["map_number"]
@@ -287,10 +293,7 @@ def evaluate(match, ratings, cito_rows, key):
         # If two sources explicitly disagree on the format, leave EV blank.
         if match["best_of"] and supplied and match["best_of"] != supplied:
             formats = ()
-        for side, label in zip(row["sides"], match["names"]):
-            side["ratings"] = [{"source": source.name, "rating": source.teams[team_key(label)]}
-                               for source in ratings if team_key(label) in source.teams]
-        primary = next((source for source in ratings if all(team_key(n) in source.teams for n in match["names"])), None)
+        primary = next((source for source in ratings if all(team in source.teams for team in team_keys)), None)
         if not formats:
             row["status"] = "format_or_score_unverified"
         elif not primary:
@@ -298,7 +301,7 @@ def evaluate(match, ratings, cito_rows, key):
         else:
             row.update(status="waiting_for_book", formats=formats, rating_source=primary.name,
                        model_scope="round_score" if rounds is not None else "series_score")
-            probabilities = projections([primary.teams[team_key(n)] for n in match["names"]],
+            probabilities = projections([primary.teams[team] for team in team_keys],
                                         maps, formats, rounds, per_map=primary.per_map)
             low, high = min(probabilities), max(probabilities)
             outcome = ((low, high), (1 - high, 1 - low))
@@ -325,9 +328,13 @@ def evaluate(match, ratings, cito_rows, key):
 class Reader:
     def __init__(self):
         self.cito_key = env_value("CS2_CITO_API_KEY")
-        self.ratings = []
+        self.ratings = cs2_ratings.current_ratings([
+            *cs2_ratings.load_ratings(cs2_ratings.CACHE_PATH, "cache"),
+            *cs2_ratings.load_ratings(cs2_ratings.SEED_PATH, "bundled"),
+        ], now())
         self.rating_warnings = []
         self.rating_checked = float("-inf")
+        self.rating_interval = RATING_RETRY_INTERVAL
         self.pending_ratings = None
         self.cito_rows = []
         self.cito_checked = float("-inf")
@@ -350,14 +357,19 @@ class Reader:
         events_future = pool.submit(live_events)
         if self.pending_ratings is not None and self.pending_ratings.done():
             updates, self.rating_warnings = self.pending_ratings.result()
-            ratings = {source.name: source for source in (*self.ratings, *updates)}
-            self.ratings = list(ratings.values())
             self.pending_ratings = None
-        if self.pending_ratings is None and tick - self.rating_checked >= RATING_INTERVAL:
+            self.rating_interval = RATING_INTERVAL if updates else RATING_RETRY_INTERVAL
+            self.ratings = cs2_ratings.current_ratings([*self.ratings, *updates], now())
+            if updates:
+                try:
+                    cs2_ratings.save_ratings(cs2_ratings.CACHE_PATH,
+                                            [source for source in self.ratings if source.origin != "bundled"])
+                except OSError:
+                    self.rating_warnings.append("Could not save the local Elo cache.")
+        if self.pending_ratings is None and tick - self.rating_checked >= self.rating_interval:
             self.rating_checked = tick
             self.pending_ratings = pool.submit(self.fetch_ratings)
-        reference = now()
-        self.ratings = [source for source in self.ratings if timedelta(0) <= reference - source.as_of <= MAX_RATING_AGE]
+        self.ratings = cs2_ratings.current_ratings(self.ratings, now())
         key = self.cito_key
         if key and tick - self.cito_checked >= CITO_INTERVAL:
             self.cito_checked = tick
@@ -379,7 +391,8 @@ class Reader:
             warnings.append(self.cito_warning)
         rows = list(pool.map(lambda match: evaluate(match, self.ratings, self.cito_rows, key), matches))
         return {"updated_utc": now().isoformat(), "games": rows, "warnings": warnings, "round_feed": bool(key),
-                "rating_sources": [{"name": source.name, "as_of": source.as_of.isoformat()} for source in self.ratings]}
+                "rating_sources": [{"name": source.name, "as_of": source.as_of.isoformat(),
+                                    "origin": source.origin, "teams": len(source.teams)} for source in self.ratings]}
 
 
 def read_for_display(snapshot, reference):

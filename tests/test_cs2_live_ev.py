@@ -168,3 +168,30 @@ def test_loads_dated_fragcharts_map_elo(monkeypatch):
     assert source.teams["100thieves"] == 1725
     assert source.teams["bojong"] == 1312
     assert cs2.projections((1600, 1500), (0, 0), (1,), per_map=True) == pytest.approx([.640065], abs=1e-6)
+
+
+def test_reader_uses_dated_cache_or_snapshot_until_expiry(monkeypatch, tmp_path):
+    cache = tmp_path / "ratings.json"
+    monkeypatch.setattr(elo, "CACHE_PATH", cache)
+    monkeypatch.setattr(cs2, "now", lambda: NOW)
+
+    seed = cs2.Reader().ratings[0]
+    assert seed.origin == "bundled"
+    assert seed.as_of.date().isoformat() == "2026-11-27"
+    assert seed.teams["bojong"] == 1312
+    assert seed.teams[elo.team_key("FUT Esports")] == 1798
+
+    update = elo.Ratings("Fragcharts", NOW, {"natusvincere": 1831, "m80": 1661}, per_map=True)
+    elo.save_ratings(cache, [update])
+    saved = cs2.Reader().ratings[0]
+    assert saved.origin == "cache" and saved.per_map and saved.teams == update.teams
+
+    match = {**cs2.fixture(event(), NOW), "score_at": NOW - timedelta(minutes=3)}
+    monkeypatch.setattr(cs2, "market_book", lambda _: book())
+    row = cs2.evaluate(match, [saved], [], None)
+    assert row["sides"][0]["ratings"] == [{"source": "Fragcharts", "rating": 1831}]
+    assert row["status"] == "waiting_for_score"
+    assert "ev_low" not in row["sides"][0]
+
+    monkeypatch.setattr(cs2, "now", lambda: NOW + timedelta(days=3, seconds=1))
+    assert cs2.Reader().ratings == []

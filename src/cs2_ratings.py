@@ -3,7 +3,10 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
+import json
+from pathlib import Path
 import re
+from tempfile import NamedTemporaryFile
 import unicodedata
 
 import requests
@@ -13,6 +16,10 @@ PREDICT = "https://csgopredict.org/rankings/"
 FRAGCHARTS = "https://www.fragcharts.com/rankings/elo"
 MAX_RATING_AGE = timedelta(days=3)
 TIMEOUT = (3, 6)
+ROOT = Path(__file__).resolve().parents[1]
+SEED_PATH = ROOT / "models" / "cs2_elo_seed.json"
+CACHE_PATH = ROOT / "data" / "processed" / "cs2_elo.json"
+SOURCE_ORDER = ("Fragcharts", "CS ELO Analyzer", "CSGOPredict")
 TEAM_ALIASES = {
     "navi": "natusvincere",
     "nip": "ninjasinpyjamas",
@@ -20,6 +27,11 @@ TEAM_ALIASES = {
     "teamspirit": "spirit",
     "lunacyteam": "lunacy",
     "xiesport": "xi",
+    "futesports": "fut",
+    "donstuesports": "donstu",
+    "baksesports": "baks",
+    "gremioesports": "gremio",
+    "leoteam": "leo",
 }
 
 
@@ -98,6 +110,61 @@ class Ratings:
     as_of: datetime
     teams: dict
     per_map: bool = False
+    origin: str = "provider"
+
+
+def current_ratings(sources, reference):
+    chosen = {}
+    for source in sources:
+        if not timedelta(0) <= reference - source.as_of <= MAX_RATING_AGE:
+            continue
+        previous = chosen.get(source.name)
+        quality = source.as_of, len(source.teams), source.origin == "provider"
+        if previous is None or quality > (previous.as_of, len(previous.teams), previous.origin == "provider"):
+            chosen[source.name] = source
+    return [chosen[name] for name in SOURCE_ORDER if name in chosen]
+
+
+def load_ratings(path, origin):
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload["version"] != 1 or not isinstance(payload["sources"], list):
+            return []
+        sources = []
+        for source in payload["sources"]:
+            name = source["name"]
+            observed = datetime.fromisoformat(source["as_of"])
+            if name not in SOURCE_ORDER or observed.utcoffset() is None:
+                continue
+            teams = {}
+            for key, value in source["teams"].items():
+                normalized = team_key(key)
+                if not normalized or normalized in teams or type(value) is not int or not 100 <= value <= 4000:
+                    break
+                teams[normalized] = value
+            else:
+                if len(teams) >= 2:
+                    sources.append(Ratings(name, observed, teams, name == "Fragcharts", origin))
+        return sources
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return []
+
+
+def save_ratings(path, sources):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"version": 1, "sources": [
+        {"name": source.name, "as_of": source.as_of.isoformat(), "teams": source.teams}
+        for source in sources
+    ]}
+    temp = None
+    try:
+        with NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as output:
+            temp = Path(output.name)
+            json.dump(payload, output, sort_keys=True)
+        temp.replace(path)
+    finally:
+        if temp is not None:
+            temp.unlink(missing_ok=True)
 
 
 def fragcharts_ratings(reference):
