@@ -236,11 +236,15 @@ def scan(path):
     started = now().astimezone(halftime_paper.ET)
     day = started.date()
     days = (day - timedelta(days=1), day) if started.hour < 6 else (day,)
+    # ESPN determines which games are in progress. The venue can be late to mark an open market live.
+    earliest = datetime.combine(days[0], datetime.min.time(), tzinfo=halftime_paper.ET) - timedelta(minutes=30)
+    latest = datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=halftime_paper.ET) + timedelta(minutes=30)
+    start_window = (earliest.astimezone(timezone.utc), latest.astimezone(timezone.utc))
     warnings = []
     ledger = read_ledger(path)
     previous = {row["game_id"]: row for row in ledger}
     with ThreadPoolExecutor(max_workers=8) as pool:
-        inventory = pool.submit(halftime_paper.live_inventory, LEAGUE)
+        inventory = pool.submit(halftime_paper.live_inventory, LEAGUE, start_window=start_window)
         try:
             games = scoreboards(days)
         except halftime_paper.FEED_ERRORS:

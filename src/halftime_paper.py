@@ -214,14 +214,19 @@ def contract_and_sides(game):
     return None
 
 
-def live_inventory(league_filter=None):
+def live_inventory(league_filter=None, *, start_window=None):
     from .tennis_wager import us_score
 
     listings = {league: {} for league in OTHER_SCOREBOARDS}
     live_games = {}
     offset = 0
     while True:
-        params = {"active": "true", "closed": "false", "live": "true", "limit": 100, "offset": offset}
+        params = {"active": "true", "closed": "false", "limit": 100, "offset": offset}
+        if start_window is None:
+            params["live"] = "true"
+        else:
+            earliest, latest = start_window
+            params.update(startDateMin=earliest.isoformat(), startDateMax=latest.isoformat())
         if league_filter:
             params["tagSlug"] = league_filter.lower()
         try:
@@ -232,11 +237,14 @@ def live_inventory(league_filter=None):
         for event in events:
             slug = event.get("slug") or ""
             league = slug.split("-", 1)[0].upper()
-            if (event.get("ended") or event.get("live") is not True or not SLUG.fullmatch(slug)
+            is_live = event.get("live") is True
+            if (event.get("ended") or not SLUG.fullmatch(slug)
                     or (league_filter and league != league_filter)):
                 continue
+            if not is_live and start_window is None:
+                continue
             title = str(event.get("title") or "").strip()
-            if title and len(event.get("teams") or []) >= 2:
+            if is_live and title and len(event.get("teams") or []) >= 2:
                 live_games[slug] = {"event": slug, "league": league, "title": title, "phase": "live",
                                     "score_text": str(event.get("score") or ""),
                                     "period_text": str(event.get("period") or "")}
@@ -250,8 +258,13 @@ def live_inventory(league_filter=None):
             if league not in listings:
                 continue
             for market in event.get("markets") or []:
-                if market.get("slug") == f"aec-{slug}":
-                    listings[league][slug] = market
+                if market.get("slug") != f"aec-{slug}":
+                    continue
+                if start_window is not None:
+                    listed = utc(market.get("gameStartTime"))
+                    if listed is None or not earliest <= listed < latest:
+                        continue
+                listings[league][slug] = market
         if len(events) < 100:
             break
         offset += len(events)

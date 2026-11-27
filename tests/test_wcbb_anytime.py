@@ -85,11 +85,34 @@ def test_rejects_newer_or_changed_state(monkeypatch):
     assert paper.forecast(summary, paper.game_state(fixture(4, 18)), NOW) is None
 
 
+def test_discovers_open_moneyline_before_exchange_marks_game_live(monkeypatch):
+    contract, _, _ = inputs(1, .73, ".50")
+    delayed = {"slug": EVENT, "live": False, "ended": False, "markets": [contract]}
+    finished = {**delayed, "ended": True}
+    outside = {**delayed, "markets": [{**contract, "gameStartTime": (NOW - timedelta(days=3)).isoformat()}]}
+    start_window = (NOW - timedelta(days=1), NOW + timedelta(days=1))
+
+    def inventory_response(*args, params, **kwargs):
+        assert params["tagSlug"] == "wcbb"
+        assert "live" not in params
+        assert params["startDateMin"] == start_window[0].isoformat()
+        assert params["startDateMax"] == start_window[1].isoformat()
+        return {"events": [delayed, finished, outside]}
+
+    monkeypatch.setattr(paper.halftime_paper, "read_json", inventory_response)
+    listings, live = paper.halftime_paper.live_inventory("WCBB", start_window=start_window)
+    assert live == []
+    game = {**paper.game_state(fixture()), "listed_moneylines": listings["WCBB"]}
+    event, market, assignments = paper.halftime_paper.contract_and_sides(game)
+    assert (event["slug"], market["slug"], assignments) == (EVENT, MARKET, {"away": True, "home": False})
+
+
 def test_scan_persists_once_and_uses_exchange_settlement(monkeypatch, tmp_path):
     path = tmp_path / "wcbb.sqlite3"
     contract, summary, book = inputs(4, .75, ".50")
     monkeypatch.setattr(paper, "now", lambda: NOW)
-    monkeypatch.setattr(paper.halftime_paper, "live_inventory", lambda league: ({"WCBB": [(EVENT, contract)]}, []))
+    monkeypatch.setattr(paper.halftime_paper, "live_inventory",
+                        lambda league, *, start_window: ({"WCBB": [(EVENT, contract)]}, []))
     monkeypatch.setattr(paper, "read_json", lambda *args, **kwargs: summary)
     monkeypatch.setattr(paper, "public", lambda *args, **kwargs: {"marketData": book})
     calls = iter([fixture(4), fixture(4, 18)])
