@@ -738,6 +738,8 @@ const wcbbStatus = {
   live_order_already_attempted: 'Order attempt already recorded',
   live_order_recorded: 'Order recorded',
   live_order_unknown: 'Order state unknown',
+  live_order_retry_unconfirmed: 'Waiting for Polymarket to confirm the prior expiry and zero fills',
+  waiting_for_retry_quote: 'Waiting for a new book quote after expiry',
   quote_expired_before_order: 'Quote expired before order',
   outside_live_stake_cap: 'Order exceeds $5 cap',
 };
@@ -803,6 +805,7 @@ function renderWcbb(now, query) {
     const info = element('div', '');
     info.append(element('p', game.title, 'selection'),
       element('p', [game.score, game.checkpoint, game.clock,
+        game.refreshing_order ? 'Rechecking after expiry' : '',
         game.order_state ? readableStatus(game.order_state) : wcbbStatus[game.status],
         game.retry_after_seconds ? 'Retry window ' + game.retry_after_seconds + 's' : '',
         game.book_age_seconds ? 'Book age ' + game.book_age_seconds + 's' : '',
@@ -827,6 +830,7 @@ function renderWcbb(now, query) {
     numbers.append(element('p', readableStatus(order.state)),
       element('small', order.quantity + ' shares requested at ' + price(Number(order.limit)) + ' limit · ' + money(Number(order.cost)) + ' screened cost'));
     if (Number.isInteger(order.filled_quantity)) numbers.append(element('small', order.filled_quantity + ' shares filled'));
+    if (order.attempt_number === 2) numbers.append(element('small', 'Retry after zero-fill expiry'));
     if (order.order_id) numbers.append(element('small', 'Order ' + order.order_id));
     row.append(info, numbers);
     return row;

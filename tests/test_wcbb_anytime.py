@@ -1,7 +1,9 @@
 from base64 import b64encode
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 import sys
+from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
@@ -282,6 +284,113 @@ def test_live_scanner_rechecks_state_and_records_a_single_capped_order(monkeypat
     assert len(submitted) == 1
 
 
+def test_wcbb_refreshes_expired_order_only_with_new_qualifying_quote_and_zero_confirmed_fills(monkeypatch, tmp_path):
+    paper_path = tmp_path / "paper.sqlite3"
+    path = tmp_path / "wcbb.sqlite3"
+    contract, summary, book = inputs(1, .75, ".50")
+    moment = NOW
+    monkeypatch.setattr(paper, "now", lambda: moment)
+    monkeypatch.setattr(pro_halftime_orders, "now", lambda: moment)
+    monkeypatch.setattr(paper.halftime_paper, "live_inventory",
+                        lambda league, *, start_window: ({"WCBB": [(EVENT, contract)]}, []))
+    monkeypatch.setattr(paper, "read_json", lambda *args, **kwargs: summary)
+    monkeypatch.setattr(paper.halftime_paper, "scores", lambda *args: [fixture()])
+    monkeypatch.setattr(paper.SCANNER_BOOKS, "read", lambda *args, **kwargs: book)
+    fresh_books, submissions, lookups = [], [], []
+
+    def refresh_book(path, fetch, *, fresh_book):
+        assert fresh_book is True and MARKET in path
+        fresh_books.append(book["transactTime"])
+        return book
+
+    def submit(payload):
+        submissions.append(payload)
+        return {"id": f"order-{len(submissions)}", "executions": [{"order": {
+            "state": pro_halftime_orders.EXPIRED, "cumQuantity": 0,
+        }}]}
+
+    exchange_quantity = 1
+
+    def retrieve(order_id):
+        lookups.append(order_id)
+        return {"order": {"id": order_id, "marketSlug": MARKET, "state": pro_halftime_orders.EXPIRED,
+                          "cumQuantity": exchange_quantity}}
+
+    monkeypatch.setattr(paper.SCANNER_BOOKS, "request", refresh_book)
+
+    def client():
+        return nullcontext(SimpleNamespace(orders=SimpleNamespace(create=submit, retrieve=retrieve)))
+
+    original = pro_halftime_orders.AutomaticOrders(path, client)
+    first = paper.scan(paper_path, live_orders=original)
+    assert first["orders"][0]["filled_quantity"] == 0
+
+    restarted = pro_halftime_orders.AutomaticOrders(path, client, max_book_age=paper.BOOK_MAX_AGE, retry_expired=True)
+    moment += timedelta(seconds=1)
+    stale = paper.scan(paper_path, live_orders=restarted)
+    assert stale["games"][0]["status"] == "waiting_for_retry_quote"
+
+    book["transactTime"] = moment.isoformat()
+    book["bids"][0]["px"]["value"] = ".25"
+    failed_screen = paper.scan(paper_path, live_orders=restarted)
+    assert failed_screen["games"][0]["status"] == "below_ev"
+    assert not lookups and len(submissions) == 1
+
+    book["bids"][0]["px"]["value"] = ".47"
+    unconfirmed = paper.scan(paper_path, live_orders=restarted)
+    assert unconfirmed["games"][0]["status"] == "live_order_retry_unconfirmed"
+    assert len(submissions) == 1
+
+    exchange_quantity = 0
+    accepted = paper.scan(paper_path, live_orders=restarted)
+    retry, prior = accepted["orders"]
+    assert (retry["order_id"], prior["order_id"]) == ("order-2", "order-1")
+    assert retry["attempt_number"] == 2 and float(retry["cost"]) <= 5
+    assert submissions[1]["price"]["value"] == "0.47"
+    assert submissions[1]["tif"] == "TIME_IN_FORCE_FILL_OR_KILL"
+    assert fresh_books[-1] == moment.isoformat()
+
+    repeat = paper.scan(paper_path, live_orders=restarted)
+    assert repeat["games"][0]["status"] == "live_order_already_attempted"
+    assert lookups == ["order-1", "order-1"] and len(submissions) == 2
+
+
+def test_concurrent_retries_reserve_only_one_replacement(monkeypatch, tmp_path):
+    moment = NOW
+    monkeypatch.setattr(pro_halftime_orders, "now", lambda: moment)
+    checked = Barrier(2, timeout=5)
+    submissions = []
+
+    def submit(payload):
+        submissions.append(payload)
+        return {"id": f"order-{len(submissions)}", "executions": [{"order": {
+            "state": pro_halftime_orders.EXPIRED, "cumQuantity": 0,
+        }}]}
+
+    def retrieve(order_id):
+        checked.wait()
+        return {"order": {"id": order_id, "marketSlug": MARKET, "state": pro_halftime_orders.EXPIRED,
+                          "cumQuantity": 0}}
+
+    def client():
+        return nullcontext(SimpleNamespace(orders=SimpleNamespace(create=submit, retrieve=retrieve)))
+
+    ledger = pro_halftime_orders.AutomaticOrders(tmp_path / "orders.sqlite3", client, retry_expired=True)
+
+    def make_entry():
+        return {"league": paper.LEAGUE, "event": EVENT, "official_game_id": "40123",
+                "recorded_at": moment.isoformat(), "quantity": 9,
+                "quote": {"quote_utc": moment.isoformat(), "total_estimate": "4.84"}}
+
+    payload = {"marketSlug": MARKET}
+    assert ledger.place(make_entry(), payload)["status"] == "live_order_recorded"
+    moment += timedelta(seconds=1)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: ledger.place(make_entry(), payload, retry_for="order-1"), range(2)))
+    assert {result["status"] for result in results} == {"live_order_already_attempted", "live_order_recorded"}
+    assert len(submissions) == len(ledger.recent()) == 2
+
+
 @pytest.mark.parametrize("auth_ok", [True, False])
 def test_dashboard_runner_enables_only_wcbb_live_after_auth_check(monkeypatch, tmp_path, auth_ok):
     for name in (run_research.KEY_ID_VAR, run_research.SECRET_VAR, "POLYMARKET_KEY_ID", "POLYMARKET_SECRET_KEY",
@@ -313,6 +422,7 @@ def test_dashboard_runner_enables_only_wcbb_live_after_auth_check(monkeypatch, t
         run_research.main()
         assert started == [app]
         assert scanner.wcbb_orders.path == tmp_path / paper.LIVE_DB_PATH
+        assert scanner.wcbb_orders.retry_expired is True
         assert scanner.read()["wcbb_anytime"]["live_ordering"]
     else:
         with pytest.raises(SystemExit) as error:

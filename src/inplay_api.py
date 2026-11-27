@@ -118,6 +118,8 @@ class ScanState:
                  (self.league_live_loop, "nfl", scan_nfl),
                  (self.league_live_loop, "mbb", scan_college_live, "mbb"),
                  (self.league_live_loop, "cfb", scan_college_live, "cfb"))
+        if self.wcbb_orders is not None:
+            tasks += ((self.wcbb_order_loop,),)
         for target, *args in tasks:
             worker = threading.Thread(target=target, args=args, daemon=True)
             worker.start()
@@ -208,16 +210,20 @@ class ScanState:
                 error = None
             except (sqlite3.Error, ValueError, OSError) as exc:
                 error = f"WCBB settlements unavailable ({type(exc).__name__})."
-            order_error = None
-            if self.wcbb_orders is not None:
-                try:
-                    self.wcbb_orders.refresh()
-                except Exception as exc:
-                    order_error = f"WCBB order status could not be refreshed ({type(exc).__name__})."
             with self.lock:
                 self.wcbb_settlement_error = error
-                self.wcbb_order_read_error = order_error
             self.stop.wait(60)
+
+    def wcbb_order_loop(self):
+        while not self.stop.is_set():
+            try:
+                self.wcbb_orders.refresh()
+                error = None
+            except Exception as exc:
+                error = f"WCBB order status could not be refreshed ({type(exc).__name__})."
+            with self.lock:
+                self.wcbb_order_read_error = error
+            self.stop.wait(10)
 
     def cs2_loop(self):
         reader = cs2_live_ev.Reader()

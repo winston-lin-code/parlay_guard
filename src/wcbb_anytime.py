@@ -101,13 +101,15 @@ def moneyline_url(event, market):
     return None
 
 
-def scan_game(game, listings, previous, *, live=False):
+def scan_game(game, listings, previous, *, live_orders=None):
     away, home = (game["teams"][key] for key in ("away", "home"))
     row = {"game_id": game["id"], "title": f"{display_team(away)} vs {display_team(home)}",
            "score": f"{away['abbreviation']} {game['scores']['away']} · {home['abbreviation']} {game['scores']['home']}",
            "checkpoint": game["checkpoint"], "clock": game["clock_text"], "status": "unmatched_market"}
-    if game["id"] in previous:
-        entry = previous[game["id"]]
+    live = live_orders is not None
+    entry = previous.get(game["id"])
+    retry = live and entry is not None and live_orders.can_retry(entry)
+    if entry is not None and not retry:
         row.update(status="live_order_already_attempted" if live else "paper_entry_logged", side=entry["side"],
                    market_url=moneyline_url(entry.get("event"), entry.get("market")))
         if live:
@@ -123,13 +125,20 @@ def scan_game(game, listings, previous, *, live=False):
         return row, None
     event, contract, assignments = listing
     row["market_url"] = moneyline_url(event["slug"], contract["slug"])
+    if retry:
+        row["refreshing_order"] = True
+        if contract["slug"] != entry["market_slug"]:
+            return {**row, "status": "live_order_already_attempted"}, None
     try:
         summary = read_json("GET", SUMMARY_URL, max_age=15, params={"event": game["id"]},
                             headers={"Cache-Control": "no-cache"})
     except halftime_paper.FEED_ERRORS:
         return {**row, "status": "espn_probability_unavailable"}, None
     try:
-        book = SCANNER_BOOKS.read(contract["slug"], fetch=public, clock=now)
+        if retry:
+            book = SCANNER_BOOKS.request(f"/v1/markets/{contract['slug']}/book", public, fresh_book=True)
+        else:
+            book = SCANNER_BOOKS.read(contract["slug"], fetch=public, clock=now)
     except BookRateLimited as exc:
         return {**row, "status": "book_rate_limited", "retry_after_seconds": exc.retry_after}, None
     except halftime_paper.FEED_ERRORS:
@@ -145,6 +154,8 @@ def scan_game(game, listings, previous, *, live=False):
             return {**row, "status": "book_stale", "book_age_seconds": int(age)}, None
         if quoted is None or quoted < game["tip"] or quoted > checked:
             return {**row, "status": "no_fresh_book"}, None
+        if retry and ((previous_at := utc(entry["recorded_at"])) is None or quoted <= previous_at):
+            return {**row, "status": "waiting_for_retry_quote"}, None
         estimate = forecast(summary, game, quoted)
         if not estimate:
             return {**row, "status": "waiting_for_probability"}, None
@@ -315,7 +326,8 @@ def scan(path, *, start_index=0, live_orders=None):
         order = ids[offset:] + ids[:offset]
         # A busy venue can exhaust the first part of a scan. Rotate the
         # request order between passes while preserving the dashboard order.
-        completed = dict(zip(order, pool.map(lambda key: scan_game(games[key], market_list, previous, live=live), order)))
+        completed = dict(zip(order, pool.map(
+            lambda key: scan_game(games[key], market_list, previous, live_orders=live_orders), order)))
         results = [completed[key] for key in ids]
     candidates = [entry for _, entry in results if entry]
     verified = {}
@@ -340,7 +352,8 @@ def scan(path, *, start_index=0, live_orders=None):
         if live:
             attempt = {**entry, "league": LEAGUE, "official_game_id": entry["game_id"],
                        "quote": {"quote_utc": entry["quote_utc"], "total_estimate": entry["cost"]}}
-            outcome = live_orders.place(attempt, payload)
+            prior = previous.get(entry["game_id"])
+            outcome = live_orders.place(attempt, payload, retry_for=prior["order_id"] if prior else None)
             row["status"] = outcome["status"]
             row["order_state"] = outcome.get("state")
         else:

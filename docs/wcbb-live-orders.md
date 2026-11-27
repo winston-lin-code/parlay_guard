@@ -10,10 +10,15 @@ python -m src.run_research --live-wcbb
 
 The strategy looks for its first qualifying in-game moneyline with win
 probability above 60%, screened EV of at least 5%, and a best ask of at least
-20¢. It attempts one fill-or-kill limit order per game with a $5 all-in cap.
+20¢. It uses a fill-or-kill limit order with a $5 all-in cap per game.
+
+If Polymarket confirms the first order expired with zero fills, the runner
+refreshes the score and order book and allows one retry that passes the same
+screen. A request with unknown status stays reserved while Polymarket status
+is checked by order ID when available.
 
 The WCBB Anytime tab shows order IDs, exchange states, and confirmed fill
 quantities alongside historical paper results. Keep
-`data/live_orders/wcbb_anytime.sqlite3` between runs to retain the
-one-attempt-per-game limit. Press Ctrl+C to stop automatic orders.
+`data/live_orders/wcbb_anytime.sqlite3` between runs to preserve both attempts
+and the per-game cap. Press Ctrl+C to stop automatic orders.
 [WCBB Anytime dashboard](http://127.0.0.1:8000/inplay?phase=wcbb)

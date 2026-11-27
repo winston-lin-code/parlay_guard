@@ -74,7 +74,8 @@ def main():
             client = live_client(args.env_file)
             if args.live_wcbb:
                 verify_account(client)
-                inplay_scanner.wcbb_orders = AutomaticOrders(ROOT / LIVE_DB_PATH, client, max_book_age=BOOK_MAX_AGE)
+                inplay_scanner.wcbb_orders = AutomaticOrders(ROOT / LIVE_DB_PATH, client, max_book_age=BOOK_MAX_AGE,
+                                                            retry_expired=True)
             if args.live_halftime:
                 inplay_scanner.pro_halftime_orders = AutomaticOrders(ROOT / DEFAULT_LIVE_DB, client)
         except ImportError:

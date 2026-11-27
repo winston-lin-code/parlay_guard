@@ -225,7 +225,8 @@ def test_live_scan_places_only_one_capped_automatic_limit(monkeypatch, tmp_path,
     assert len(submissions) == 1
 
 
-def test_ambiguous_real_order_is_reserved_and_never_retried(monkeypatch, tmp_path):
+@pytest.mark.parametrize("retry_expired", [False, True])
+def test_ambiguous_real_order_is_reserved_and_never_retried(monkeypatch, tmp_path, retry_expired):
     monkeypatch.setattr(orders, "now", lambda: NOW)
     entry = {"league": "nhl", "event": SLUG, "official_game_id": 1, "recorded_at": NOW.isoformat(),
              "quote": {"quote_utc": NOW.isoformat(), "total_estimate": "4.95"}}
@@ -240,9 +241,10 @@ def test_ambiguous_real_order_is_reserved_and_never_retried(monkeypatch, tmp_pat
         return nullcontext(SimpleNamespace(orders=SimpleNamespace(create=submit)))
 
     path = tmp_path / "live.sqlite3"
-    ledger = orders.HalftimeOrders(path, client)
+    ledger = orders.AutomaticOrders(path, client, retry_expired=retry_expired)
     assert ledger.place(entry, payload)["status"] == "live_order_unknown"
-    assert ledger.recent()[0]["state"] == "unknown"
-    assert orders.HalftimeOrders(path, client).place({**entry, "event": f"{SLUG}-new"}, payload)[
+    attempt, = ledger.recent()
+    assert attempt["state"] == "unknown" and not ledger.can_retry(attempt)
+    assert orders.AutomaticOrders(path, client, retry_expired=retry_expired).place({**entry, "event": f"{SLUG}-new"}, payload)[
         "status"] == "live_order_already_attempted"
     assert seen == [True]
