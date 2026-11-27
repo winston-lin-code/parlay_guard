@@ -373,7 +373,22 @@ qualifying entries to `data/paper_trades/pro_halftime.sqlite3`.
 python -m src.pro_live_ev --watch --paper-halftime --stake 10 --slippage .01
 ```
 
-To replay this exact rule historically, use timestamped score-verifier
+To run the any-time high-EV rule on current NHL and MLB games with paper
+stakes, use the public live feeds. No historical input files are needed.
+
+```powershell
+python -m src.pro_live_ev --watch --paper-any-high-ev --stake 5
+```
+
+The runner records the first qualifying entry per game at a supported
+live game state. It requires win probability above 60% and screened ROI
+of at least 5% after fees, the five-point haircut, and 1¢ per share in
+slippage. In the output, `any_high_ev_paper.status` reports the decision.
+Qualifying entries are saved to `data/paper_trades/pro_any_high_ev.sqlite3`.
+This ledger records entry quotes for forward testing and does not settle
+games or produce an ROI report.
+
+For a historical replay, use timestamped score-verifier
 JSONL and native order-book recordings or PMData Polymarket US L2 Parquet.
 On Windows, collect score-verifier output with
 `python -m src.pro_live_scores --watch | Out-File -Encoding utf8 scores.jsonl`.

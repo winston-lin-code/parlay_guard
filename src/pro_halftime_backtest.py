@@ -12,7 +12,7 @@ from pathlib import Path
 from . import pro_inplay_model as model
 from .inplay_scan import utc
 from .pro_live_ev import (
-    HALFTIME_WIN_FLOOR, MAX_BOOK_AGE, MIN_SCREENED_ROI, at_halftime, best_paper_quote, verified_for_pricing,
+    HALFTIME_WIN_FLOOR, MAX_BOOK_AGE, at_halftime, best_paper_quote, qualifies_screened_roi, verified_for_pricing,
 )
 from .us_wager import SLUG, WagerError
 
@@ -191,8 +191,7 @@ def simulate(games, breaks, books, coverage, *, stake=STAKE, high_ev=False):
             if not quote:
                 continue
             roi = quote["screened_ev"]
-            qualifies = roi >= MIN_SCREENED_ROI if high_ev else 0 < roi < MIN_SCREENED_ROI
-            if not qualifies:
+            if not qualifies_screened_roi(roi, high_ev=high_ev):
                 continue
             won = winner_side == game["winner"]
             cost = Decimal(quote["total_estimate"])
@@ -260,6 +259,11 @@ def main():
     args = parser.parse_args()
     if not args.stake.is_finite() or args.stake <= 0 or args.stake % Decimal(".01"):
         parser.error("--stake must be a positive USD amount with at most two decimal places")
+    missing = [str(path) for path in (args.states, args.settlements, *args.books) if not path.is_file()]
+    if missing:
+        parser.exit(2, "Missing replay files: " + ", ".join(missing) + "\n"
+                    "Supply recorded input files or run python -m src.pro_live_ev --watch --paper-any-high-ev "
+                    "to collect new paper entries.\n")
     try:
         if args.output.exists():
             raise FileExistsError(f"Output folder already exists: {args.output}")

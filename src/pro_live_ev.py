@@ -25,6 +25,7 @@ IDLE_HEARTBEAT_SECONDS = 60
 HALFTIME_CHECKPOINTS = {"mlb": ("end", 5), "nhl": ("intermission", 2)}
 HALFTIME_WIN_FLOOR = .60
 DEFAULT_PAPER_DB = Path("data/paper_trades/pro_halftime.sqlite3")
+DEFAULT_ANY_HIGH_EV_DB = Path("data/paper_trades/pro_any_high_ev.sqlite3")
 OUTCOME_SCOPE = {
     "mlb": r"extra innings (?:are )?included",
     "nhl": r"overtime and (?:any )?shootout (?:are )?included",
@@ -167,12 +168,22 @@ def at_halftime(league, official):
     return (official.get("phase"), official.get("period")) == HALFTIME_CHECKPOINTS[league]
 
 
+def qualifies_screened_roi(roi, *, high_ev):
+    return roi >= MIN_SCREENED_ROI if high_ev else 0 < roi < MIN_SCREENED_ROI
+
+
 def halftime_entry(game, stake, mode):
-    if game["pricing_status"] != "priced" or not at_halftime(game["league"], game["official"]):
-        return {"status": "no_verified_halftime_quote"}
+    return entry_candidate(game, stake, mode)
+
+
+def entry_candidate(game, stake, mode, *, any_high_ev=False):
+    if game["pricing_status"] != "priced" or (not any_high_ev and not at_halftime(game["league"], game["official"])):
+        return {"status": "no_verified_quote" if any_high_ev else "no_verified_halftime_quote"}
+
     qualifies = [(side, quote) for side, quote in game["quotes"].items()
                  if quote and quote["probability"] > HALFTIME_WIN_FLOOR
-                 and 0 < quote["screened_ev"] < MIN_SCREENED_ROI and decimal(quote["total_estimate"]) <= stake]
+                 and qualifies_screened_roi(quote["screened_ev"], high_ev=any_high_ev)
+                 and decimal(quote["total_estimate"]) <= stake]
     if not qualifies:
         return {"status": "outside_probability_or_roi_band"}
     side, quote = max(qualifies, key=lambda pair: pair[1]["screened_ev"])
@@ -184,11 +195,13 @@ def halftime_entry(game, stake, mode):
              "checkpoint": game["official"]["phase"], "period": game["official"]["period"],
              "score_away_home": game["official"]["score_away_home"], "recorded_at": recorded.isoformat(),
              "stake_cap": str(stake), "quote": quote}
+    if any_high_ev:
+        entry["strategy"] = "any_high_ev"
     return {"status": "qualified", "entry": entry}
 
 
-def log_paper_entry(path, game, stake):
-    candidate = halftime_entry(game, stake, "paper")
+def log_paper_entry(path, game, stake, *, any_high_ev=False):
+    candidate = entry_candidate(game, stake, "paper", any_high_ev=any_high_ev)
     if "entry" not in candidate:
         return candidate
     entry = candidate["entry"]
@@ -215,7 +228,8 @@ def recent_paper_entries(path, limit=20):
         )]
 
 
-def scan(league, stake, slippage, *, paper_db=None, halftime_only=False, live_orders=None):
+def scan(league, stake, slippage, *, paper_db=None, halftime_only=False, live_orders=None, paper_any_high_ev=False):
+    needs_halftime = halftime_only or live_orders is not None or (paper_db is not None and not paper_any_high_ev)
     artifact = model.load(league)
     if not artifact:
         return {"league": league, "status": "model_unavailable"}
@@ -235,7 +249,7 @@ def scan(league, stake, slippage, *, paper_db=None, halftime_only=False, live_or
         if official is None:
             results.append({**verified, "title": title, "pricing_status": verified["status"]})
             continue
-        if (paper_db is not None or halftime_only or live_orders is not None) and not at_halftime(league, official):
+        if needs_halftime and not at_halftime(league, official):
             row = {**verified, "title": title, "pricing_status": "outside_halftime_checkpoint"}
             if state := model.model_state(league, official):
                 home = model.forecast(state, artifact)
@@ -254,7 +268,8 @@ def scan(league, stake, slippage, *, paper_db=None, halftime_only=False, live_or
             row["halftime_live"] = candidate
             row["paper"] = False
         elif paper_db is not None:
-            row["halftime_paper"] = log_paper_entry(paper_db, row, stake)
+            key = "any_high_ev_paper" if paper_any_high_ev else "halftime_paper"
+            row[key] = log_paper_entry(paper_db, row, stake, any_high_ev=paper_any_high_ev)
         results.append({**row, "title": title})
     return {"league": league, "listings_checked": len(events), "games": results}
 
@@ -283,19 +298,27 @@ def should_report(result, previous, elapsed):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--leagues", nargs="+", choices=LEAGUES, default=LEAGUES)
-    parser.add_argument("--stake", help="Maximum paper spend including costs, default $10 for halftime or $2 otherwise")
+    parser.add_argument("--stake", help="Maximum all-in paper cost, default $10 for halftime, $5 for any-time high EV, or $2 otherwise")
     parser.add_argument("--slippage", default=".01", help="Adverse price allowance per contract in dollars")
     parser.add_argument("--watch", action="store_true")
     parser.add_argument("--interval", type=int, default=5)
-    parser.add_argument("--paper-halftime", action="store_true",
-                        help="Log halftime paper entries with win probability above 60%% and positive ROI below 5%%")
-    parser.add_argument("--paper-db", type=Path, help="SQLite ledger for --paper-halftime")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--paper-halftime", action="store_true",
+                       help="Log halftime paper entries with win probability above 60%% and positive ROI below 5%%")
+    modes.add_argument("--paper-any-high-ev", action="store_true",
+                       help="Log the first qualifying paper entry per game with win probability above 60%% and ROI of at least 5%%")
+    parser.add_argument("--paper-db", type=Path, help="Override the selected paper mode's SQLite ledger path")
     args = parser.parse_args()
-    if args.paper_db and not args.paper_halftime:
-        parser.error("--paper-db requires --paper-halftime")
-    paper_db = (args.paper_db or DEFAULT_PAPER_DB) if args.paper_halftime else None
+    if args.paper_db and not (args.paper_halftime or args.paper_any_high_ev):
+        parser.error("--paper-db requires a paper logging mode")
+    paper_db, default_stake = None, "2.00"
+    if args.paper_halftime:
+        paper_db, default_stake = DEFAULT_PAPER_DB, "10.00"
+    elif args.paper_any_high_ev:
+        paper_db, default_stake = DEFAULT_ANY_HIGH_EV_DB, "5.00"
+    paper_db = args.paper_db or paper_db
     try:
-        stake = decimal(args.stake or ("10.00" if args.paper_halftime else "2.00"))
+        stake = decimal(args.stake or default_stake)
         slippage = decimal(args.slippage)
         if stake < CENT or not 0 <= slippage < 1 or args.interval < 3:
             raise ValueError("Use a stake of at least one cent, slippage below one dollar, and interval of at least 3 seconds.")
@@ -303,11 +326,18 @@ def main():
         parser.error(str(exc))
     leagues = list(dict.fromkeys(args.leagues))
     last_output = {}
+
+    def scan_league(league):
+        result = scan(league, stake, slippage, paper_db=paper_db, paper_any_high_ev=args.paper_any_high_ev)
+        if args.paper_any_high_ev:
+            return {**result, "paper_strategy": "any_high_ev", "stake_cap": str(stake)}
+        return result
+
     try:
         with ThreadPoolExecutor(max_workers=len(leagues)) as pool:
             while True:
                 started = monotonic()
-                for result in pool.map(lambda league: scan(league, stake, slippage, paper_db=paper_db), leagues):
+                for result in pool.map(scan_league, leagues):
                     league = result["league"]
                     previous, emitted = last_output.get(league, (None, started))
                     if should_report(result, previous, started - emitted):

@@ -130,6 +130,42 @@ def test_mlb_halftime_uses_end_of_fifth():
     assert not ev.at_halftime("mlb", {"phase": "middle", "period": 5})
 
 
+def test_any_time_paper_scanner_records_one_high_ev_entry_before_halftime(monkeypatch, tmp_path):
+    official, event, market, verified = nhl_scenario()
+    event["live"] = True
+    verified.update(event=SLUG, league="nhl")
+    book = {"marketSlug": f"aec-{SLUG}", "state": "MARKET_STATE_OPEN",
+            "transactTime": (NOW - timedelta(seconds=1)).isoformat(),
+            "bids": [{"px": {"value": ".32", "currency": "USD"}, "qty": "30"}],
+            "offers": [{"px": {"value": ".34", "currency": "USD"}, "qty": "30"}]}
+    monkeypatch.setattr(ev, "now", lambda: NOW)
+    monkeypatch.setattr(ev.model, "forecast", lambda *_: .70)
+    monkeypatch.setattr(ev, "league_listings", lambda *_: [(SLUG, event, NOW)])
+    monkeypatch.setattr(ev, "assess", lambda *_: {"games": [verified]})
+    monkeypatch.setattr(ev, "current_official", lambda *_: official)
+    monkeypatch.setattr(ev, "current_market", lambda *_: (event, market))
+    monkeypatch.setattr(ev, "public", lambda *_args, **_kwargs: {"marketData": book})
+
+    path = tmp_path / "any-high.sqlite3"
+
+    def scan():
+        return ev.scan("nhl", Decimal(5), Decimal(".01"), paper_db=path, paper_any_high_ev=True)["games"][0]
+
+    first = scan()
+    assert first["any_high_ev_paper"]["status"] == "outside_probability_or_roi_band"
+    assert not path.exists()
+    book["bids"][0]["px"]["value"] = ".45"
+    second = scan()
+    entry, = ev.recent_paper_entries(path)
+    assert second["any_high_ev_paper"]["status"] == "paper_entry_logged"
+    assert entry["mode"] == "paper"
+    assert entry["strategy"] == "any_high_ev"
+    assert entry["checkpoint"] == "in_play"
+    assert entry["quote"]["screened_ev"] >= .05
+    assert Decimal(entry["quote"]["total_estimate"]) <= 5
+    assert scan()["any_high_ev_paper"]["status"] == "already_logged"
+
+
 @pytest.mark.parametrize("league,phase,period,winning_state,venue_period", [
     ("nhl", "intermission", 2, {"period_type": "REG", "seconds_remaining": 0}, "END P2"),
     ("mlb", "end", 5, {"scheduled_innings": 9, "bases": None, "outs": None}, "END 5"),
