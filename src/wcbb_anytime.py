@@ -12,7 +12,7 @@ import sqlite3
 from . import halftime_paper
 from .inplay_scan import PROBABILITY_HAIRCUT, read_json, utc
 from .pro_live_ev import best_paper_quote
-from .us_wager import BOOK_MAX_AGE, ONE, decimal, public
+from .us_wager import BOOK_MAX_AGE, ONE, SLUG, decimal, public
 
 DB_PATH = Path("data/paper_trades/wcbb_anytime.sqlite3")
 LEAGUE = "WCBB"
@@ -92,6 +92,12 @@ def display_team(team):
     return team.get("shortDisplayName") or team.get("displayName") or team["abbreviation"]
 
 
+def moneyline_url(event, market):
+    if isinstance(event, str) and event.startswith("wcbb-") and SLUG.fullmatch(event) and market == "aec-" + event:
+        return f"https://polymarket.us/sports/wcbb/{event}?marketSlug={market}"
+    return None
+
+
 def scan_game(game, listings, previous):
     away, home = (game["teams"][key] for key in ("away", "home"))
     row = {"game_id": game["id"], "title": f"{display_team(away)} vs {display_team(home)}",
@@ -99,15 +105,28 @@ def scan_game(game, listings, previous):
            "checkpoint": game["checkpoint"], "clock": game["clock_text"], "status": "unmatched_market"}
     if game["id"] in previous:
         entry = previous[game["id"]]
-        return {**row, "status": "paper_entry_logged", "side": entry["side"]}, None
+        return {**row, "status": "paper_entry_logged", "side": entry["side"],
+                "market_url": moneyline_url(entry.get("event"), entry.get("market"))}, None
     try:
+        if listings is None:
+            return {**row, "status": "market_catalog_unavailable"}, None
         listing = halftime_paper.contract_and_sides({**game, "listed_moneylines": listings})
-        if not listing:
-            return row, None
-        event, contract, assignments = listing
+    except halftime_paper.FEED_ERRORS:
+        return {**row, "status": "market_catalog_unavailable"}, None
+    if not listing:
+        return row, None
+    event, contract, assignments = listing
+    row["market_url"] = moneyline_url(event["slug"], contract["slug"])
+    try:
         summary = read_json("GET", SUMMARY_URL, max_age=15, params={"event": game["id"]},
                             headers={"Cache-Control": "no-cache"})
+    except halftime_paper.FEED_ERRORS:
+        return {**row, "status": "espn_probability_unavailable"}, None
+    try:
         book = public(f"/v1/markets/{contract['slug']}/book", fresh_book=True)["marketData"]
+    except halftime_paper.FEED_ERRORS:
+        return {**row, "status": "book_unavailable"}, None
+    try:
         quoted = utc(book.get("transactTime"))
         if (quoted is None or quoted < game["tip"] or not 0 <= (now() - quoted).total_seconds() <= BOOK_MAX_AGE
                 or book.get("marketSlug") != contract["slug"] or book.get("state") != "MARKET_STATE_OPEN"):
@@ -253,9 +272,11 @@ def scan(path):
         try:
             listings, _ = inventory.result()
         except halftime_paper.FEED_ERRORS:
-            listings = {}
+            market_list = None
             warnings.append("Polymarket US listings unavailable.")
-        results = list(pool.map(lambda game: scan_game(game, listings.get(LEAGUE, []), previous), games.values()))
+        else:
+            market_list = listings.get(LEAGUE, [])
+        results = list(pool.map(lambda game: scan_game(game, market_list, previous), games.values()))
     candidates = [entry for _, entry in results if entry]
     verified = {}
     if candidates:
@@ -279,4 +300,5 @@ def scan(path):
     ledger = read_ledger(path) if candidates else ledger
     return {"status": "feed_unavailable" if warnings else "ready", "updated_utc": now().isoformat(),
             "games": [row for row, _ in results], "performance": performance(ledger),
-            "entries": ledger[:25], "warnings": warnings}
+            "entries": [{**entry, "market_url": moneyline_url(entry.get("event"), entry.get("market"))}
+                        for entry in ledger[:25]], "warnings": warnings}

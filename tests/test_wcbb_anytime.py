@@ -85,6 +85,26 @@ def test_rejects_newer_or_changed_state(monkeypatch):
     assert paper.forecast(summary, paper.game_state(fixture(4, 18)), NOW) is None
 
 
+@pytest.mark.parametrize(("failure", "expected"), [
+    ("espn", "espn_probability_unavailable"),
+    ("book", "book_unavailable"),
+])
+def test_verified_market_link_survives_feed_failure(monkeypatch, failure, expected):
+    contract, summary, _ = inputs(1, .73, ".50")
+
+    def unavailable(*args, **kwargs):
+        raise ValueError("feed unavailable")
+
+    monkeypatch.setattr(paper, "read_json", unavailable if failure == "espn" else lambda *args, **kwargs: summary)
+    monkeypatch.setattr(paper, "public", unavailable)
+    game = paper.game_state(fixture())
+    row, entry = paper.scan_game(game, [(EVENT, contract)], {})
+    assert row["status"] == expected and entry is None
+    assert row["market_url"] == f"https://polymarket.us/sports/wcbb/{EVENT}?marketSlug={MARKET}"
+    assert "market_url" not in paper.scan_game(game, [], {})[0]
+    assert paper.scan_game(game, None, {})[0]["status"] == "market_catalog_unavailable"
+
+
 def test_discovers_open_moneyline_before_exchange_marks_game_live(monkeypatch):
     contract, _, _ = inputs(1, .73, ".50")
     delayed = {"slug": EVENT, "live": False, "ended": False, "markets": [contract]}
@@ -124,7 +144,9 @@ def test_scan_persists_once_and_uses_exchange_settlement(monkeypatch, tmp_path):
     accepted = paper.scan(path)
     assert accepted["performance"]["open"] == 1
     assert accepted["performance"]["roi"] is None
-    assert len(paper.scan(path)["entries"]) == 1
+    repeat = paper.scan(path)
+    assert len(repeat["entries"]) == 1
+    assert repeat["games"][0]["market_url"] == repeat["entries"][0]["market_url"] == paper.moneyline_url(EVENT, MARKET)
     monkeypatch.setattr(paper, "now", lambda: NOW + timedelta(minutes=60))
     def market_result(status):
         return lambda route: ({"slug": MARKET, "settlement": "0"} if route.endswith("/settlement")
