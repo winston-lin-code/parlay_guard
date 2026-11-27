@@ -214,7 +214,7 @@ def contract_and_sides(game):
     return None
 
 
-def live_inventory():
+def live_inventory(league_filter=None):
     from .tennis_wager import us_score
 
     listings = {league: {} for league in OTHER_SCOREBOARDS}
@@ -222,6 +222,8 @@ def live_inventory():
     offset = 0
     while True:
         params = {"active": "true", "closed": "false", "live": "true", "limit": 100, "offset": offset}
+        if league_filter:
+            params["tagSlug"] = league_filter.lower()
         try:
             page = read_json("GET", f"{GATEWAY}/v1/events", max_age=MAX_AGE, params=params)
         except (requests.ConnectionError, requests.Timeout):
@@ -230,7 +232,8 @@ def live_inventory():
         for event in events:
             slug = event.get("slug") or ""
             league = slug.split("-", 1)[0].upper()
-            if event.get("ended") or event.get("live") is not True or not SLUG.fullmatch(slug):
+            if (event.get("ended") or event.get("live") is not True or not SLUG.fullmatch(slug)
+                    or (league_filter and league != league_filter)):
                 continue
             title = str(event.get("title") or "").strip()
             if title and len(event.get("teams") or []) >= 2:

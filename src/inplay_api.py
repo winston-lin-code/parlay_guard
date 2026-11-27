@@ -24,7 +24,7 @@ from .halftime_paper import LEAGUES as HALFTIME_LEAGUES, screen_halftime
 from .tennis_live import ITF_LEAGUES, observe_first_set_break, tennis_projection
 from .tennis_wager import SCORE_MAX_AGE as ITF_SCORE_MAX_AGE, fresh as fresh_itf_score
 from .us_wager import BOOK_MAX_AGE
-from . import pro_live_ev
+from . import pro_live_ev, wcbb_anytime
 from .pro_halftime_orders import LIVE_STAKE
 
 router = APIRouter()
@@ -102,12 +102,16 @@ class ScanState:
         self.pro_halftime = {"updated_utc": None, "leagues": list(pro_live_ev.LEAGUES),
                              "scans": [], "entries": [], "paper_logging": False, "live_ordering": False}
         self.pro_halftime_orders = None
+        self.wcbb = {"status": "waiting", "updated_utc": None, "games": [], "entries": [],
+                     "performance": wcbb_anytime.performance([]), "warnings": []}
+        self.wcbb_settlement_error = None
         self.college = {"updated_utc": None, "games": [], "opportunities": [], "warnings": []}
 
     def start(self):
         self.stop.clear()
         tasks = ((self.live_loop,), (self.catalog_loop,), (self.sports_loop,), (self.college_loop,),
                  (self.board_loop,), (self.score_loop,), (self.halftime_loop,), (self.pro_halftime_loop,),
+                 (self.wcbb_loop,), (self.wcbb_settlement_loop,),
                  (self.league_live_loop, "nfl", scan_nfl),
                  (self.league_live_loop, "mbb", scan_college_live, "mbb"),
                  (self.league_live_loop, "cfb", scan_college_live, "cfb"))
@@ -178,6 +182,31 @@ class ScanState:
                     self.pro_halftime = value
                 self.stop.wait(max(1, 5 - (time.monotonic() - started)))
 
+    def wcbb_loop(self):
+        ledger = ROOT / wcbb_anytime.DB_PATH
+        while not self.stop.is_set():
+            started = time.monotonic()
+            try:
+                value = wcbb_anytime.scan(ledger)
+            except Exception as exc:
+                with self.lock:
+                    value = {**self.wcbb, "status": "feed_unavailable", "updated_utc": None, "games": [],
+                             "warnings": [f"WCBB paper scan unavailable ({type(exc).__name__})."]}
+            with self.lock:
+                self.wcbb = value
+            self.stop.wait(max(3, 12 - (time.monotonic() - started)))
+
+    def wcbb_settlement_loop(self):
+        while not self.stop.is_set():
+            try:
+                wcbb_anytime.settle(ROOT / wcbb_anytime.DB_PATH)
+                error = None
+            except (sqlite3.Error, ValueError, OSError) as exc:
+                error = f"WCBB settlements unavailable ({type(exc).__name__})."
+            with self.lock:
+                self.wcbb_settlement_error = error
+            self.stop.wait(60)
+
     def update_catalog(self, value):
         with self.lock:
             self.catalog = {**value, "observed_utc": datetime.now(timezone.utc).isoformat()}
@@ -244,6 +273,8 @@ class ScanState:
             quotes, scores = dict(self.moneyline_quotes), dict(self.scores)
             halftime = dict(self.halftime)
             pro_halftime = dict(self.pro_halftime)
+            wcbb = dict(self.wcbb)
+            wcbb_settlement_error = self.wcbb_settlement_error
         now = datetime.now(timezone.utc)
         fresh, games, observations = [], [], []
         sources = (snapshot, college, *live_sports)
@@ -301,10 +332,13 @@ class ScanState:
             coverage[key] = sum(game.get(key, 0) for game in games)
         halftime["picks"] = [pick for pick in halftime["picks"]
                              if -5 <= (now - utc(pick["quote_utc"])).total_seconds() <= BOOK_MAX_AGE]
+        if wcbb_settlement_error:
+            wcbb["warnings"] = [*wcbb["warnings"], wcbb_settlement_error]
         return {**snapshot, "catalog": catalog, "sports": sports, "stale": not observations,
                 "updated_utc": max(observations).isoformat() if observations else snapshot.get("updated_utc"),
                 "coverage": coverage, "games": games, "opportunities": ranked, "top_picks": picks,
                 "board": board, "halftime_paper": halftime, "pro_halftime": pro_snapshot_for_display(pro_halftime, now),
+                "wcbb_anytime": wcbb,
                 "warnings": sorted({warning for source in sources for warning in source.get("warnings", [])}),
                 "venue": "Polymarket CLOB (international)", "supported_markets": sorted(SCORING_MARKETS)}
 
