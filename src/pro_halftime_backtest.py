@@ -1,4 +1,4 @@
-"""Replay the MLB/NHL halftime paper rule against recorded Polymarket US books."""
+"""Replay the MLB/NHL entry rule against recorded Polymarket US books."""
 
 import argparse
 from bisect import bisect_right
@@ -71,6 +71,10 @@ def verified_observations(path, games):
 
 
 def confirmed_breaks(states, games, coverage):
+    return confirmed_entries(states, games, coverage, "halftime")
+
+
+def confirmed_entries(states, games, coverage, window):
     result = {}
     for event, game in games.items():
         league = game["league"]
@@ -84,11 +88,11 @@ def confirmed_breaks(states, games, coverage):
             if any(abs((utc(row["official"]["received_at"]) - utc(row["polymarket_us"]["received_at"])).total_seconds())
                    > MAX_BOOK_AGE for row in (first, second)):
                 continue
-            if not all(at_halftime(league, row["official"])
-                       and verified_for_pricing(row["official"], row["polymarket_us"])
-                       for row in (first, second)):
+            if not all(verified_for_pricing(row["official"], row["polymarket_us"]) for row in (first, second)):
                 continue
             if any(first["official"].get(field) != second["official"].get(field) for field in STATE_FIELDS):
+                continue
+            if window == "halftime" and not at_halftime(league, second["official"]):
                 continue
             if state := model.model_state(league, second["official"]):
                 breaks.append((first_at, entry_at, second["official"], state))
@@ -152,7 +156,7 @@ def available_books(breaks, records):
     return selected
 
 
-def simulate(games, breaks, books, coverage):
+def simulate(games, breaks, books, coverage, *, stake=STAKE, high_ev=False):
     proposals = []
     for event, checks in breaks.items():
         game = games[event]
@@ -181,10 +185,14 @@ def simulate(games, breaks, books, coverage):
             long = (winner_side == "home") == (game["home_long"] == "1")
             try:
                 quote = best_paper_quote(contract, {"long": long, "description": winner_side},
-                                         probability, book, STAKE, SLIPPAGE, entry_at)
+                                         probability, book, stake, SLIPPAGE, entry_at)
             except WagerError:
                 continue
-            if not quote or not 0 < quote["screened_ev"] < MIN_SCREENED_ROI:
+            if not quote:
+                continue
+            roi = quote["screened_ev"]
+            qualifies = roi >= MIN_SCREENED_ROI if high_ev else 0 < roi < MIN_SCREENED_ROI
+            if not qualifies:
                 continue
             won = winner_side == game["winner"]
             cost = Decimal(quote["total_estimate"])
@@ -193,7 +201,8 @@ def simulate(games, breaks, books, coverage):
                 "entry_at": entry_at.isoformat(), "book_at": observed.isoformat(), "book_received_at": received.isoformat(),
                 "settled_at": utc(game["settled_at"]).isoformat(),
                 "score_away_home": "-".join(map(str, score["score_away_home"])),
-                "selected_side": winner_side, "probability": probability, "screened_roi": quote["screened_ev"],
+                "phase": score["phase"], "period": score["period"], "checkpoint": int(at_halftime(league, score)),
+                "selected_side": winner_side, "probability": probability, "screened_roi": roi,
                 "ask_limit": quote["limit"], "quantity": quote["quantity"], "fee": quote["fee_estimate"],
                 "cost": cost, "won": int(won), "pnl": int(won) * quote["quantity"] - cost,
             })
@@ -206,17 +215,18 @@ def simulate(games, breaks, books, coverage):
     return list(unique.values())
 
 
-def write_report(output, games, trades, coverage):
+def write_report(output, games, trades, coverage, *, window="halftime"):
     output.mkdir(parents=True, exist_ok=False)
-    fields = ("league event official_game_id entry_at book_at book_received_at settled_at score_away_home selected_side "
-              "probability screened_roi ask_limit quantity fee cost won pnl").split()
+    fields = ("league event official_game_id entry_at book_at book_received_at settled_at score_away_home phase period "
+              "checkpoint selected_side probability screened_roi ask_limit quantity fee cost won pnl").split()
     with (output / "trades.csv").open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         writer.writerows(trades)
     with (output / "summary.csv").open("w", encoding="utf-8", newline="") as stream:
         writer = csv.writer(stream)
-        writer.writerow(["league", "settled_manifest_games", "verified_breaks", "book_windows", "trades",
+        writer.writerow(["league", "settled_manifest_games", "verified_breaks" if window == "halftime" else "verified_games",
+                         "book_windows", "trades",
                          "wins", "win_rate", "spend", "net_pnl", "net_roi", "max_drawdown"])
         for league in ("mlb", "nhl"):
             sample = [t for t in trades if t["league"] == league]
@@ -242,17 +252,30 @@ def main():
     parser.add_argument("--settlements", required=True, type=Path)
     parser.add_argument("--books", nargs="*", type=Path, default=[])
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--window", choices=("halftime", "any", "compare"), default="halftime",
+                        help="Replay halftime only, any supported live game state, or both")
+    parser.add_argument("--stake", type=Decimal, default=STAKE, help="All-in cap per entry in USD (default: $10)")
+    parser.add_argument("--high-ev", action="store_true",
+                        help="Require at least 5%% screened ROI instead of the default 0%%–5%% band")
     args = parser.parse_args()
+    if not args.stake.is_finite() or args.stake <= 0 or args.stake % Decimal(".01"):
+        parser.error("--stake must be a positive USD amount with at most two decimal places")
     try:
+        if args.output.exists():
+            raise FileExistsError(f"Output folder already exists: {args.output}")
         games = fixtures(args.settlements)
-        coverage = defaultdict(Counter)
-        breaks = confirmed_breaks(verified_observations(args.states, games), games, coverage)
-        books = available_books(breaks, snapshots(args.books))
-        trades = simulate(games, breaks, books, coverage)
-        write_report(args.output, games, trades, coverage)
+        states = verified_observations(args.states, games)
+        windows = ("any", "halftime") if args.window == "compare" else (args.window,)
+        for window in windows:
+            coverage = defaultdict(Counter)
+            entries = confirmed_entries(states, games, coverage, window)
+            books = available_books(entries, snapshots(args.books))
+            trades = simulate(games, entries, books, coverage, stake=args.stake, high_ev=args.high_ev)
+            output = args.output / window if len(windows) > 1 else args.output
+            write_report(output, games, trades, coverage, window=window)
+            print(f"{window}: {len(trades)} simulated trades written to {output}")
     except (OSError, ValueError, ArithmeticError, KeyError, ImportError) as exc:
         parser.exit(2, f"Backtest stopped: {exc}\n")
-    print(f"{len(trades)} simulated trades written to {args.output}")
 
 
 if __name__ == "__main__":

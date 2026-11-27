@@ -392,7 +392,18 @@ timestamp for `settled_at`. Exclude voids and other nonbinary settlements.
 python -m src.pro_halftime_backtest --states scores.jsonl --settlements settlements.csv --books books.parquet --output results/pro-halftime
 ```
 
-The replay requires two agreeing score observations at the break. It uses
+To compare the first qualifying entry at any supported game state with the
+halftime-only rule, use the same input files and a $5 all-in cap in both replays.
+
+```powershell
+python -m src.pro_halftime_backtest --window compare --stake 5 --states scores.jsonl --settlements settlements.csv --books books.parquet --output results/pro-timing
+```
+
+This writes separate `any` and `halftime` reports using the same fixtures.
+Each report includes verified game coverage and executable book coverage.
+To test first entry at a higher edge, add `--high-ev`. This requires at
+least 5% screened ROI and keeps the above-60% win probability cutoff.
+The replay requires two agreeing score observations in the entry window. It uses
 an open full book received between those observations and priced within
 five seconds of the recheck. It writes one simulated trade per official
 game, with win rate, spend, P&L, ROI and settled-equity drawdown in

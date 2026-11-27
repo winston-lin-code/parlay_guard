@@ -57,3 +57,56 @@ def test_native_epoch_is_decoded_and_new_period_disqualifies_entry(tmp_path):
     later = AT + timedelta(seconds=5)
     assert replay.confirmed_breaks({EVENT: {AT: state(AT), later: state(later, "in_play")}},
                                    {EVENT: GAME}, defaultdict(Counter)) == {}
+
+
+def test_any_window_uses_first_qualifying_quote_and_same_five_dollar_cap(monkeypatch):
+    monkeypatch.setattr(replay.model, "forecast", lambda *_: .70)
+    early_entry = AT + timedelta(seconds=3)
+    halftime = AT + timedelta(minutes=6)
+    halftime_entry = halftime + timedelta(seconds=3)
+    games = {EVENT: GAME}
+    states = {EVENT: {AT: state(AT, "in_play"), early_entry: state(early_entry, "in_play"),
+                      halftime: state(halftime), halftime_entry: state(halftime_entry)}}
+    book_times = (AT + timedelta(seconds=2), halftime + timedelta(seconds=2))
+    records = [(t, book(t)) for t in book_times]
+    stake = replay.Decimal("5")
+
+    for window, expected in (("any", early_entry), ("halftime", halftime_entry)):
+        coverage = defaultdict(Counter)
+        checks = replay.confirmed_entries(states, games, coverage, window)
+        books = replay.available_books(checks, records)
+        trade, = replay.simulate(games, checks, books, coverage, stake=stake)
+        assert trade["entry_at"] == expected.isoformat()
+        assert trade["cost"] <= stake
+        assert trade["checkpoint"] == int(window == "halftime")
+
+    coverage = defaultdict(Counter)
+    checks = replay.confirmed_entries(states, games, coverage, "any")
+    halted = [(book_times[0], book(book_times[0], "MARKET_STATE_HALTED")), records[1]]
+    trade, = replay.simulate(games, checks, replay.available_books(checks, halted), coverage, stake=stake)
+    assert trade["entry_at"] == halftime_entry.isoformat()
+
+
+def test_high_ev_replay_passes_higher_edge_and_skips_low_ev(monkeypatch):
+    monkeypatch.setattr(replay.model, "forecast", lambda *_: .70)
+    games = {EVENT: GAME}
+    early_entry = AT + timedelta(seconds=3)
+    later = AT + timedelta(minutes=1)
+    later_entry = later + timedelta(seconds=3)
+    states = {EVENT: {t: state(t, "in_play") for t in (AT, early_entry, later, later_entry)}}
+    coverage = defaultdict(Counter)
+    checks = replay.confirmed_entries(states, games, coverage, "any")
+    early_book = AT + timedelta(seconds=2)
+    later_book = later + timedelta(seconds=2)
+    cheaper = book(later_book)
+    cheaper["bids"][0]["px"]["value"] = ".45"
+    books = replay.available_books(checks, [(early_book, book(early_book)), (later_book, cheaper)])
+    stake = replay.Decimal("5")
+
+    low, = replay.simulate(games, checks, books, coverage, stake=stake)
+    high, = replay.simulate(games, checks, books, coverage, stake=stake, high_ev=True)
+    assert low["entry_at"] == early_entry.isoformat()
+    assert 0 < low["screened_roi"] < .05
+    assert high["entry_at"] == later_entry.isoformat()
+    assert high["screened_roi"] >= .05
+    assert high["cost"] <= stake
