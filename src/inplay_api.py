@@ -24,7 +24,7 @@ from .halftime_paper import LEAGUES as HALFTIME_LEAGUES, screen_halftime
 from .tennis_live import ITF_LEAGUES, observe_first_set_break, tennis_projection
 from .tennis_wager import SCORE_MAX_AGE as ITF_SCORE_MAX_AGE, fresh as fresh_itf_score
 from .us_wager import BOOK_MAX_AGE
-from . import pro_live_ev, wcbb_anytime
+from . import cs2_live_ev, pro_live_ev, wcbb_anytime
 from .pro_halftime_orders import LIVE_STAKE
 
 router = APIRouter()
@@ -105,13 +105,14 @@ class ScanState:
         self.wcbb = {"status": "waiting", "updated_utc": None, "games": [], "entries": [],
                      "performance": wcbb_anytime.performance([]), "warnings": []}
         self.wcbb_settlement_error = None
+        self.cs2 = {"updated_utc": None, "games": [], "warnings": [], "rating_sources": [], "round_feed": False}
         self.college = {"updated_utc": None, "games": [], "opportunities": [], "warnings": []}
 
     def start(self):
         self.stop.clear()
         tasks = ((self.live_loop,), (self.catalog_loop,), (self.sports_loop,), (self.college_loop,),
                  (self.board_loop,), (self.score_loop,), (self.halftime_loop,), (self.pro_halftime_loop,),
-                 (self.wcbb_loop,), (self.wcbb_settlement_loop,),
+                 (self.wcbb_loop,), (self.wcbb_settlement_loop,), (self.cs2_loop,),
                  (self.league_live_loop, "nfl", scan_nfl),
                  (self.league_live_loop, "mbb", scan_college_live, "mbb"),
                  (self.league_live_loop, "cfb", scan_college_live, "cfb"))
@@ -207,6 +208,20 @@ class ScanState:
                 self.wcbb_settlement_error = error
             self.stop.wait(60)
 
+    def cs2_loop(self):
+        reader = cs2_live_ev.Reader()
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            while not self.stop.is_set():
+                started = time.monotonic()
+                try:
+                    value = reader.snapshot(pool)
+                except Exception as exc:
+                    value = {"updated_utc": None, "games": [], "rating_sources": [], "round_feed": False,
+                             "warnings": [f"CS2 reader unavailable ({type(exc).__name__})."]}
+                with self.lock:
+                    self.cs2 = value
+                self.stop.wait(max(1, cs2_live_ev.PRICE_INTERVAL - (time.monotonic() - started)))
+
     def update_catalog(self, value):
         with self.lock:
             self.catalog = {**value, "observed_utc": datetime.now(timezone.utc).isoformat()}
@@ -275,6 +290,7 @@ class ScanState:
             pro_halftime = dict(self.pro_halftime)
             wcbb = dict(self.wcbb)
             wcbb_settlement_error = self.wcbb_settlement_error
+            cs2 = self.cs2
         now = datetime.now(timezone.utc)
         fresh, games, observations = [], [], []
         sources = (snapshot, college, *live_sports)
@@ -338,7 +354,7 @@ class ScanState:
                 "updated_utc": max(observations).isoformat() if observations else snapshot.get("updated_utc"),
                 "coverage": coverage, "games": games, "opportunities": ranked, "top_picks": picks,
                 "board": board, "halftime_paper": halftime, "pro_halftime": pro_snapshot_for_display(pro_halftime, now),
-                "wcbb_anytime": wcbb,
+                "wcbb_anytime": wcbb, "cs2": cs2_live_ev.read_for_display(cs2, now),
                 "warnings": sorted({warning for source in sources for warning in source.get("warnings", [])}),
                 "venue": "Polymarket CLOB (international)", "supported_markets": sorted(SCORING_MARKETS)}
 

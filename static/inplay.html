@@ -139,12 +139,29 @@ details > summary { color: var(--muted); font-size: .84rem; }
       <button type="button" data-phase="pregame" aria-pressed="false">Upcoming</button>
       <button type="button" data-phase="halftime" aria-pressed="false">Halftime rule</button>
       <button type="button" data-phase="wcbb" aria-pressed="false">WCBB Anytime</button>
+      <button type="button" data-phase="cs2" aria-pressed="false">CS2 Live EV</button>
     </div>
     <label class="sr-only" for="sport">Sport or league</label>
     <select id="sport" class="control"><option value="">All leagues</option></select>
     <label class="sr-only" for="search">Find a game</label>
     <input id="search" class="control" type="search" placeholder="Find a team">
   </div>
+  <section class="panel" id="cs2-panel" aria-labelledby="cs2-heading" hidden>
+    <header class="list-header"><h2 id="cs2-heading">CS2 Live EV</h2><p>Polymarket US · Read-only</p></header>
+    <div class="section">
+      <p class="muted" id="cs2-sources"></p>
+      <p class="muted">Match-winner EV uses order-book depth within $5, a five-point probability haircut, estimated fees, and 1¢ per share in slippage.</p>
+    </div>
+    <div class="section">
+      <p class="muted" id="cs2-status" role="status">Waiting for the CS2 reader</p>
+      <ul class="alt-list" id="cs2-games"></ul>
+    </div>
+    <div class="section">
+      <details><summary>How CS2 win probability updates</summary>
+        <p class="muted">A published team Elo provides the starting estimate. The series model accounts for maps won and, when available, the verified round score. With an unconfirmed best-of format, the dashboard shows a range across compatible formats. The model uses a standard MR12 format and has no live calibration for map picks, side, economy, or players alive.</p>
+      </details>
+    </div>
+  </section>
   <section class="panel" id="wcbb-panel" aria-labelledby="wcbb-heading" hidden>
     <header class="list-header"><h2 id="wcbb-heading">Women’s College Basketball Anytime</h2><p>Paper bets</p></header>
     <div class="section">
@@ -280,7 +297,7 @@ const validSlug = /^[a-z0-9][a-z0-9-]*$/;
 
 let snapshot = {};
 const requestedPhase = new URLSearchParams(window.location.search).get('phase');
-let phase = ['halftime', 'wcbb'].includes(requestedPhase) ? requestedPhase : 'all';
+let phase = ['halftime', 'wcbb', 'cs2'].includes(requestedPhase) ? requestedPhase : 'all';
 let chosen = '';
 let selectedGame = '';
 let listFingerprint = '';
@@ -292,6 +309,7 @@ let halftimeFingerprint = '';
 let halftimeCoverageFingerprint = '';
 let proHalftimeFingerprint = '';
 let wcbbFingerprint = '';
+let cs2Fingerprint = '';
 let loading = false;
 let offline = false;
 const previousPrices = new Map();
@@ -770,9 +788,61 @@ function renderWcbb(now, query) {
   }));
 }
 
+const cs2Status = {
+  waiting_for_score: 'Waiting for a fresh series score',
+  format_or_score_unverified: 'Series format or score could not be verified',
+  rating_missing: 'No current Elo source covers both teams',
+  waiting_for_book: 'Waiting for a fresh book at the verified score',
+  book_unavailable: 'Order book unavailable',
+};
+
+function renderCs2(now, query) {
+  const scan = snapshot.cs2;
+  const current = !offline && fresh(scan?.updated_utc, now);
+  const games = current ? (scan.games || []).filter(row => row.title.toLowerCase().includes(query)) : [];
+  const sources = (scan?.rating_sources || []).map(source => source.name + ' · ' + tipTime.format(new Date(source.as_of)));
+  text('cs2-sources', [sources.length ? sources.join(' / ') : 'Waiting for dated team Elo',
+    scan?.round_feed ? 'Cito round feed configured' : 'Polymarket series score'].join(' · '));
+  const notices = [offline ? 'Connection interrupted' : !current ? 'Waiting for the CS2 reader'
+    : !games.length ? 'No live CS2 moneylines match this view.' : '', ...(scan?.warnings || [])].filter(Boolean);
+  text('cs2-status', notices.join(' '));
+  $('cs2-status').hidden = notices.length === 0;
+  const fingerprint = JSON.stringify(games);
+  if (fingerprint === cs2Fingerprint) return;
+  cs2Fingerprint = fingerprint;
+  const range = (lower, upper, format) => Number.isFinite(lower)
+    ? format(lower) + (upper - lower >= .001 ? ' to ' + format(upper) : '') : '—';
+  $('cs2-games').replaceChildren(...games.map(game => {
+    const item = element('li', '');
+    const info = element('div', '');
+    info.append(element('h3', game.title), element('p', [
+      game.period, game.maps ? 'Maps ' + game.maps.join('–') : '',
+      game.rounds ? 'Rounds ' + game.rounds.join('–') : '',
+      game.formats?.length ? game.formats.map(value => 'BO' + value).join('/') : '',
+      game.rating_source, cs2Status[game.status],
+    ].filter(Boolean).join(' · '), 'muted'));
+    const columns = element('div', '', 'quotes');
+    for (const side of game.sides) {
+      const data = element('div', '', 'quote');
+      data.append(element('h3', side.name));
+      const elo = (side.ratings || []).map(rating => rating.source + ' ' + rating.rating).join(' · ');
+      if (elo) data.append(element('p', elo, 'muted'));
+      data.append(element('p', 'Win probability ' + range(side.probability_low, side.probability_high, pct)),
+        element('p', 'Fair decimal odds ' + (side.probability_low > 0
+          ? range(1 / side.probability_high, 1 / side.probability_low, value => value.toFixed(2)) : '—')),
+        element('p', 'Best ask ' + price(side.ask)),
+        element('p', 'Screened EV ' + range(side.ev_low, side.ev_high, edge), side.ev_low > 0 ? 'edge' : ''));
+      columns.append(data);
+    }
+    item.append(info, columns);
+    return item;
+  }));
+}
+
 function render() {
   const now = Date.now();
-  const timestamps = phase === 'wcbb' ? [snapshot.wcbb_anytime?.updated_utc]
+  const timestamps = phase === 'cs2' ? [snapshot.cs2?.updated_utc]
+    : phase === 'wcbb' ? [snapshot.wcbb_anytime?.updated_utc]
     : phase === 'halftime' ? [snapshot.halftime_paper?.updated_utc, snapshot.pro_halftime?.updated_utc]
     : [snapshot.updated_utc, ...(snapshot.board || []).flatMap(game =>
     [game.phase === 'live' ? game.score_utc : null, ...game.moneyline_quotes.map(row => row.quote_utc)])];
@@ -781,12 +851,18 @@ function render() {
   const updated = Math.max(...timestamps.filter(value => fresh(value, now)).map(Date.parse));
   text('feed', offline ? 'Connection interrupted' : live ? 'Updated ' + clockTime.format(new Date(updated)) : 'Waiting for fresh data');
   const wcbb = phase === 'wcbb';
-  $('sport').hidden = wcbb;
+  const cs2 = phase === 'cs2';
+  $('sport').hidden = wcbb || cs2;
+  $('cs2-panel').hidden = !cs2;
   $('wcbb-panel').hidden = !wcbb;
-  $('standard-panel').hidden = wcbb || phase === 'halftime';
+  $('standard-panel').hidden = wcbb || cs2 || phase === 'halftime';
   $('halftime-panel').hidden = phase !== 'halftime';
   $('pro-halftime-panel').hidden = phase !== 'halftime';
   const query = $('search').value.trim().toLowerCase();
+  if (cs2) {
+    renderCs2(now, query);
+    return;
+  }
   if (wcbb) {
     renderWcbb(now, query);
     return;
@@ -1008,6 +1084,7 @@ for (const tab of $('phases').querySelectorAll('button')) {
 }
 refresh();
 setInterval(refresh, 5000);
+setInterval(() => { if (phase === 'cs2') refresh(); }, 2000);
 setInterval(render, 1000);
 </script>
 </body>
