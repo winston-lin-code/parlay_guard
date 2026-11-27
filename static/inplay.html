@@ -156,13 +156,13 @@ details > summary { color: var(--muted); font-size: .84rem; }
     </details>
   </section>
   <section class="panel" id="pro-halftime-panel" aria-labelledby="pro-halftime-heading" hidden>
-    <header class="list-header"><h2 id="pro-halftime-heading">MLB and NHL halftime paper</h2><p id="pro-halftime-mode"></p></header>
-    <p class="muted halftime-rule">$10 cap · Win probability above 60% · Screened ROI strictly between 0% and 5%</p>
+    <header class="list-header"><h2 id="pro-halftime-heading">MLB and NHL halftime</h2><p id="pro-halftime-mode"></p></header>
+    <p class="muted halftime-rule" id="pro-halftime-rule"></p>
     <p class="muted halftime-rule">MLB · End of the fifth inning. NHL · Second intermission.</p>
     <p class="placeholder" id="pro-halftime-status" role="status">Waiting for MLB and NHL data</p>
     <ul class="halftime-list" id="pro-halftime-games"></ul>
     <details class="halftime-coverage" id="pro-halftime-entries" open>
-      <summary>Recent paper entries</summary>
+      <summary id="pro-halftime-history">Recent paper entries</summary>
       <p id="pro-halftime-empty" class="muted">No paper entries logged</p>
       <ul class="halftime-list" id="pro-halftime-entry-list"></ul>
     </details>
@@ -596,8 +596,13 @@ function renderHalftime(now, league, query, games) {
 function renderProHalftime(now, league, query) {
   const scan = snapshot.pro_halftime;
   const current = !offline && fresh(scan?.updated_utc, now);
+  const live = Boolean(scan?.live_ordering);
   const useLeague = value => !league || value.toUpperCase() === league;
-  text('pro-halftime-mode', scan?.paper_logging ? 'Paper logging on' : 'Research preview');
+  text('pro-halftime-mode', live ? 'Real-money auto orders' : scan?.paper_logging ? 'Paper logging on' : 'Research preview');
+  text('pro-halftime-rule', '$' + Number(scan?.stake_cap || 10).toFixed(0) +
+    ' all-in cap · Win probability above 60% · Screened ROI strictly between 0% and 5%');
+  text('pro-halftime-history', live ? 'Recent real orders' : 'Recent paper entries');
+  text('pro-halftime-empty', live ? 'No real orders recorded' : 'No paper entries logged');
   const rows = current ? (scan.scans || []).filter(row => useLeague(row.league)) : [];
   const games = rows.flatMap(row => row.games || []).filter(
     game => (game.title || game.event).toLowerCase().includes(query)
@@ -623,7 +628,7 @@ function renderProHalftime(now, league, query) {
   const available = games.map(game => [game, Object.values(game.quotes || {}).filter(
     quote => quote && age(quote.quote_utc, now) >= 0 && age(quote.quote_utc, now) <= 5000
   )]);
-  const key = JSON.stringify([available, entries]);
+  const key = JSON.stringify([live, available, entries]);
   if (key === proHalftimeFingerprint) return;
   proHalftimeFingerprint = key;
   $('pro-halftime-games').replaceChildren(...available.map(([game, quotes]) => {
@@ -631,7 +636,8 @@ function renderProHalftime(now, league, query) {
     row.append(element('h3', game.title || game.event),
       element('p', [game.league.toUpperCase(), game.official?.score_away_home?.join('–'),
         game.official?.period ? (game.league === 'mlb' ? 'Inning ' : 'Period ') + game.official.period : '',
-        readableStatus(game.halftime_paper?.status || game.pricing_status)].filter(Boolean).join(' · '), 'muted'));
+        readableStatus(game.halftime_live?.state || game.halftime_live?.status ||
+          game.halftime_paper?.status || game.pricing_status)].filter(Boolean).join(' · '), 'muted'));
     if (game.win_probability) row.append(element('p',
       'Away ' + pct(game.win_probability.away) + ' · Home ' + pct(game.win_probability.home) + ' win probability'));
     for (const quote of quotes) row.append(element('p', [quote.side, price(Number(quote.limit)) + ' limit',
@@ -643,8 +649,10 @@ function renderProHalftime(now, league, query) {
     const row = element('li', '');
     row.append(element('p', entry.quote?.side || entry.event, 'selection'),
       element('p', [entry.league.toUpperCase(), entry.event, proTipTime.format(new Date(entry.recorded_at)),
-        '$' + Number(entry.quote?.total_estimate).toFixed(2) + ' simulated cost',
-        edge(entry.quote?.screened_ev) + ' screened ROI'].join(' · '), 'muted'));
+        '$' + Number(entry.quote?.total_estimate).toFixed(2) + (live ? ' screened cost' : ' simulated cost'),
+        edge(entry.quote?.screened_ev) + ' screened ROI',
+        live ? readableStatus(entry.state) : '', live && entry.order_id ? 'Order ' + entry.order_id : '']
+        .filter(Boolean).join(' · '), 'muted'));
     return row;
   }));
 }
@@ -653,12 +661,17 @@ const proTipTime = new Intl.DateTimeFormat(undefined, {weekday:'short', hour:'nu
   timeZone:'America/New_York', timeZoneName:'short'});
 const readableStatus = value => ({
   outside_halftime_checkpoint:'Waiting for the halftime checkpoint',
-  outside_probability_or_roi_band:'Outside the paper entry thresholds',
+  outside_probability_or_roi_band:'Outside the entry thresholds',
   paper_entry_logged:'Paper entry logged',
   already_logged:'Paper entry already logged',
   no_verified_halftime_quote:'Waiting for a verified halftime quote',
   feed_unavailable:'Feed unavailable',
-})[value] || (value || '').replaceAll('_', ' ');
+  live_order_already_attempted:'Order attempt already recorded',
+  live_order_unknown:'Order state unknown',
+  pending:'Order state unknown',
+  unknown:'Order state unknown',
+  submitted:'Order accepted · Fill unconfirmed',
+})[value] || (value || '').replace(/^ORDER_STATE_/, '').replaceAll('_', ' ').toLowerCase();
 
 function render() {
   const now = Date.now();

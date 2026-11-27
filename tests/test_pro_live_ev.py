@@ -1,10 +1,13 @@
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 
 from src import pro_inplay_model as model, pro_live_ev as ev
+from src import pro_halftime_orders as orders
 
 NOW = datetime(2026, 7, 1, 18, tzinfo=timezone.utc)
 SLUG = "nhl-wpg-bos-2026-07-01"
@@ -125,3 +128,85 @@ def test_halftime_paper_logs_one_qualifying_bet_per_game(tmp_path, monkeypatch):
 def test_mlb_halftime_uses_end_of_fifth():
     assert ev.at_halftime("mlb", {"phase": "end", "period": 5})
     assert not ev.at_halftime("mlb", {"phase": "middle", "period": 5})
+
+
+@pytest.mark.parametrize("league,phase,period,winning_state,venue_period", [
+    ("nhl", "intermission", 2, {"period_type": "REG", "seconds_remaining": 0}, "END P2"),
+    ("mlb", "end", 5, {"scheduled_innings": 9, "bases": None, "outs": None}, "END 5"),
+])
+def test_live_scan_places_only_one_capped_automatic_limit(monkeypatch, tmp_path, league, phase, period,
+                                                  winning_state, venue_period):
+    official, event, _, verified = nhl_scenario()
+    slug = SLUG if league == "nhl" else "mlb-bos-nyy-2026-07-01"
+    official.update(winning_state, phase=phase, period=period)
+    event.update(slug=slug, live=True)
+    event["eventState"].update(type=ev.SPORTS[league], period=venue_period)
+    contract = event["markets"][0]
+    contract.update(slug=f"aec-{slug}", sportsMarketType=f"{ev.SPORTS[league]}_team_full_game_winner")
+    if league == "mlb":
+        contract["description"] = "Extra innings are included."
+    market = {**ev.market_state(league, event), "received_at": official["received_at"]}
+    verified.update(event=slug, league=league, official=official, polymarket_us=market)
+    book = {"marketSlug": contract["slug"], "state": "MARKET_STATE_OPEN",
+            "transactTime": (NOW - timedelta(seconds=1)).isoformat(),
+            "bids": [{"px": {"value": ".45", "currency": "USD"}, "qty": "30"}],
+            "offers": [{"px": {"value": ".46", "currency": "USD"}, "qty": "30"}]}
+    monkeypatch.setattr(ev, "now", lambda: NOW)
+    monkeypatch.setattr(orders, "now", lambda: NOW)
+    monkeypatch.setattr(ev.model, "forecast", lambda *_: .65)
+    monkeypatch.setattr(ev, "league_listings", lambda *_: [(slug, event, NOW)])
+    monkeypatch.setattr(ev, "assess", lambda *_: {"games": [verified]})
+    monkeypatch.setattr(ev, "current_official", lambda *_: official)
+    monkeypatch.setattr(ev, "current_market", lambda *_: (event, market))
+    monkeypatch.setattr(ev, "public", lambda *_args, **_kwargs: {"marketData": book})
+
+    submissions = []
+
+    def submit(payload):
+        submissions.append(payload)
+        return {"id": "test-order", "executions": [{"order": {"state": "ORDER_STATE_FILLED"}}]}
+
+    def client():
+        return nullcontext(SimpleNamespace(orders=SimpleNamespace(create=submit)))
+
+    path = tmp_path / "live.sqlite3"
+    ledger = orders.HalftimeOrders(path, client)
+    result = ev.scan(league, orders.LIVE_STAKE, Decimal(".01"), live_orders=ledger)["games"][0]
+    assert result["halftime_live"]["state"] == "ORDER_STATE_FILLED"
+    assert "halftime_paper" not in result
+    entry, = ledger.recent()
+    assert entry["order_id"] == "test-order"
+    assert entry["quote"]["quantity"] == 8
+    assert Decimal(entry["quote"]["total_estimate"]) == Decimal("4.70")
+    assert 0 < entry["quote"]["screened_ev"] < .05
+    assert submissions == [{"marketSlug": contract["slug"], "type": "ORDER_TYPE_LIMIT",
+                            "price": {"value": "0.45", "currency": "USD"}, "quantity": 8,
+                            "tif": "TIME_IN_FORCE_FILL_OR_KILL", "intent": "ORDER_INTENT_BUY_SHORT",
+                            "manualOrderIndicator": "MANUAL_ORDER_INDICATOR_AUTOMATIC", "synchronousExecution": True}]
+    restarted = orders.HalftimeOrders(path, client)
+    repeat = ev.scan(league, orders.LIVE_STAKE, Decimal(".01"), live_orders=restarted)["games"][0]
+    assert repeat["halftime_live"]["status"] == "live_order_already_attempted"
+    assert len(submissions) == 1
+
+
+def test_ambiguous_real_order_is_reserved_and_never_retried(monkeypatch, tmp_path):
+    monkeypatch.setattr(orders, "now", lambda: NOW)
+    entry = {"league": "nhl", "event": SLUG, "official_game_id": 1, "recorded_at": NOW.isoformat(),
+             "quote": {"quote_utc": NOW.isoformat(), "total_estimate": "4.95"}}
+    payload = {"marketSlug": f"aec-{SLUG}"}
+    seen = []
+
+    def submit(_):
+        seen.append(True)
+        raise TimeoutError
+
+    def client():
+        return nullcontext(SimpleNamespace(orders=SimpleNamespace(create=submit)))
+
+    path = tmp_path / "live.sqlite3"
+    ledger = orders.HalftimeOrders(path, client)
+    assert ledger.place(entry, payload)["status"] == "live_order_unknown"
+    assert ledger.recent()[0]["state"] == "unknown"
+    assert orders.HalftimeOrders(path, client).place({**entry, "event": f"{SLUG}-new"}, payload)[
+        "status"] == "live_order_already_attempted"
+    assert seen == [True]

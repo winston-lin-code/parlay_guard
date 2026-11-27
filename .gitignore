@@ -11,6 +11,7 @@ data/polymarket/data/
 # Generated outputs
 data/processed/
 data/paper_trades/
+data/live_orders/
 
 # Python
 __pycache__/

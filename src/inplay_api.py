@@ -25,6 +25,7 @@ from .tennis_live import ITF_LEAGUES, observe_first_set_break, tennis_projection
 from .tennis_wager import SCORE_MAX_AGE as ITF_SCORE_MAX_AGE, fresh as fresh_itf_score
 from .us_wager import BOOK_MAX_AGE
 from . import pro_live_ev
+from .pro_halftime_orders import LIVE_STAKE
 
 router = APIRouter()
 ROOT = Path(__file__).resolve().parents[1]
@@ -99,7 +100,8 @@ class ScanState:
         self.live_sports = {}
         self.halftime = {"updated_utc": None, "leagues": list(HALFTIME_LEAGUES), "picks": [], "warnings": []}
         self.pro_halftime = {"updated_utc": None, "leagues": list(pro_live_ev.LEAGUES),
-                             "scans": [], "entries": [], "paper_logging": False}
+                             "scans": [], "entries": [], "paper_logging": False, "live_ordering": False}
+        self.pro_halftime_orders = None
         self.college = {"updated_utc": None, "games": [], "opportunities": [], "warnings": []}
 
     def start(self):
@@ -145,29 +147,33 @@ class ScanState:
             self.stop.wait(max(4, 12 - (time.monotonic() - started)))
 
     def pro_halftime_loop(self):
-        logging = os.getenv("PG_ENABLE_PRO_HALFTIME_PAPER") == "1"
+        live_orders = self.pro_halftime_orders
+        logging = live_orders is None and os.getenv("PG_ENABLE_PRO_HALFTIME_PAPER") == "1"
         ledger = ROOT / pro_live_ev.DEFAULT_PAPER_DB
-        stake, slippage = Decimal("10.00"), Decimal(".01")
+        stake = LIVE_STAKE if live_orders is not None else Decimal("10.00")
 
         def scan(league):
             try:
-                return pro_live_ev.scan(league, stake, slippage, paper_db=ledger if logging else None,
-                                        halftime_only=True)
+                return pro_live_ev.scan(league, stake, Decimal(".01"), paper_db=ledger if logging else None,
+                                        halftime_only=True, live_orders=live_orders)
             except (sqlite3.Error, ValueError, OSError) as exc:
-                return {"league": league, "status": "paper_scan_unavailable", "error": str(exc)}
+                return {"league": league, "status": "halftime_scan_unavailable", "error": type(exc).__name__}
 
         with ThreadPoolExecutor(max_workers=len(pro_live_ev.LEAGUES)) as pool:
             while not self.stop.is_set():
                 started = time.monotonic()
                 scans = list(pool.map(scan, pro_live_ev.LEAGUES))
                 try:
-                    entries = pro_live_ev.recent_paper_entries(ledger)
+                    entries = live_orders.recent() if live_orders is not None else pro_live_ev.recent_paper_entries(ledger)
                     warning = None
+                    if any(entry.get("state") in ("pending", "unknown") for entry in entries):
+                        warning = "An order state is unresolved. Check your Polymarket US activity."
                 except (sqlite3.Error, ValueError, OSError):
-                    entries, warning = [], "Paper ledger unavailable."
+                    entries, warning = [], "Halftime ledger unavailable."
                 value = {"updated_utc": datetime.now(timezone.utc).isoformat(),
                          "leagues": list(pro_live_ev.LEAGUES), "scans": scans, "entries": entries,
-                         "paper_logging": logging, "warning": warning}
+                         "stake_cap": str(stake), "paper_logging": logging,
+                         "live_ordering": live_orders is not None, "warning": warning}
                 with self.lock:
                     self.pro_halftime = value
                 self.stop.wait(max(1, 5 - (time.monotonic() - started)))

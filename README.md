@@ -307,9 +307,28 @@ Open [the live dashboard](http://127.0.0.1:8000/) or jump directly to
 [the Halftime tab](http://127.0.0.1:8000/inplay?phase=halftime#pro-halftime-panel).
 The Halftime tab shows current win probabilities when supported, verified
 quotes at the checkpoint, upcoming starts, and recent paper entries from
-`data/paper_trades/pro_halftime.sqlite3`. Real-money orders are disabled
-in this launcher. The built-in scanner uses the same rule and ledger as
+`data/paper_trades/pro_halftime.sqlite3`. Paper is the default mode.
+The built-in scanner uses the same rule and ledger as
 the standalone `--paper-halftime` command below. Use one runner per checkout.
+
+To enable automatic real-money orders for MLB and NHL, set
+`POLYMARKET_US_KEY_ID` and `POLYMARKET_US_SECRET_KEY` in the project's
+git-ignored `.env` file or in the environment, then start the dashboard
+with `--live-halftime`.
+
+```powershell
+python -m src.run_research --live-halftime
+```
+
+Live mode applies the same halftime rule with a $5 all-in cap per game.
+It sends a fill-or-kill limit order at the verified executable price and
+screens EV with the existing fee estimate, 1¢ per share in slippage, and
+five-point probability haircut. If the full order cannot fill at its limit,
+the exchange cancels it. Because orders use whole shares, actual spend may
+be below $5. The Halftime tab shows the exchange order status and ID when
+available. Keep `data/live_orders/pro_halftime.sqlite3` between runs so the
+scanner does not repeat an attempt for the same game, even after a timeout.
+Press Ctrl+C to stop the runner.
 
 NBA forecasts and player props require the local NBA history and model
 artifacts used by the regular dashboard. Keep those files when updating

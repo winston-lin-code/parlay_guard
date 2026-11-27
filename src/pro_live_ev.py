@@ -70,7 +70,7 @@ def verified_for_pricing(official, market):
     return True
 
 
-def best_paper_quote(contract, side, p, book, stake, slippage, reference):
+def best_order_quote(contract, side, p, book, stake, slippage, reference):
     pick = {"side": (side.get("team") or {}).get("name") or side.get("description"), "probability": p}
     minimum = max(1, int(decimal(contract["minimumTradeQty"]).to_integral_value(rounding=ROUND_CEILING)))
     low, high = minimum, min(int(stake / CENT), 10_000)
@@ -78,31 +78,37 @@ def best_paper_quote(contract, side, p, book, stake, slippage, reference):
     while low <= high:
         quantity = (low + high) // 2
         try:
-            _, quote = quote_order(pick, contract, side["long"], quantity, book, reference, slippage=slippage)
+            order, quote = quote_order(pick, contract, side["long"], quantity, book, reference, slippage=slippage)
         except WagerError:
             high = quantity - 1
             continue
         if decimal(quote["total_estimate"]) <= stake:
-            largest = quote
+            largest = order, quote
             low = quantity + 1
         else:
             high = quantity - 1
     if not largest:
         return None
-    quote = best = largest
+    best_order, best = largest
+    quote = best
     # Smaller quantities can avoid paying through the top of a thin book.
     while quote["screened_ev"] < MIN_SCREENED_ROI and quote["quantity"] > minimum:
-        _, quote = quote_order(pick, contract, side["long"], quote["quantity"] - 1, book, reference,
-                               slippage=slippage)
+        order, quote = quote_order(pick, contract, side["long"], quote["quantity"] - 1, book, reference,
+                                   slippage=slippage)
         if quote["screened_ev"] > best["screened_ev"]:
-            best = quote
+            best_order, best = order, quote
     cost = float(best["total_estimate"])
-    return {**best, "probability": p, "slippage_per_contract": float(slippage),
-            "estimated_net_roi": p * best["quantity"] / cost - 1,
-            "meets_paper_roi_floor": best["screened_ev"] >= MIN_SCREENED_ROI}
+    return best_order, {**best, "probability": p, "slippage_per_contract": float(slippage),
+                        "estimated_net_roi": p * best["quantity"] / cost - 1,
+                        "meets_paper_roi_floor": best["screened_ev"] >= MIN_SCREENED_ROI}
 
 
-def evaluate(league, event, verified, artifact, stake, slippage):
+def best_paper_quote(contract, side, p, book, stake, slippage, reference):
+    result = best_order_quote(contract, side, p, book, stake, slippage, reference)
+    return result[1] if result else None
+
+
+def evaluate(league, event, verified, artifact, stake, slippage, *, orders=None):
     state = model.model_state(league, verified.get("official", {}))
     row = {**verified, "paper": True}
     if not state:
@@ -114,7 +120,7 @@ def evaluate(league, event, verified, artifact, stake, slippage):
     matched = contract_for(league, event)
     if not matched:
         return {**row, "pricing_status": "unverified_moneyline_terms"}
-    contract, _ = matched
+    contract, original_sides = matched
     try:
         book = public(f"/v1/markets/{contract['slug']}/book", fresh_book=True)["marketData"]
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -139,13 +145,18 @@ def evaluate(league, event, verified, artifact, stake, slippage):
     row["win_probability"] = {"home": home, "away": 1 - home}
     row["official"] = official
     row["polymarket_us"] = current
-    row["quotes"] = {}
     contract, sides = new_contract
+    if any(original_sides[side]["long"] != sides[side]["long"] for side in sides):
+        return {**row, "pricing_status": "moneyline_outcome_changed"}
+    row["quotes"] = {}
     for label, p in row["win_probability"].items():
         side = sides[label]
         if side.get("tradable") is True:
             try:
-                row["quotes"][label] = best_paper_quote(contract, side, p, book, stake, slippage, reference)
+                if result := best_order_quote(contract, side, p, book, stake, slippage, reference):
+                    payload, row["quotes"][label] = result
+                    if orders is not None:
+                        orders[label] = payload
             except WagerError:
                 row["quotes"][label] = None
     row["pricing_status"] = "priced" if any(row["quotes"].values()) else "no_executable_quote_at_stake"
@@ -156,7 +167,7 @@ def at_halftime(league, official):
     return (official.get("phase"), official.get("period")) == HALFTIME_CHECKPOINTS[league]
 
 
-def log_paper_entry(path, game, stake):
+def halftime_entry(game, stake, mode):
     if game["pricing_status"] != "priced" or not at_halftime(game["league"], game["official"]):
         return {"status": "no_verified_halftime_quote"}
     qualifies = [(side, quote) for side, quote in game["quotes"].items()
@@ -168,11 +179,19 @@ def log_paper_entry(path, game, stake):
     quoted, recorded = utc(quote["quote_utc"]), now()
     if not quoted or not 0 <= (recorded - quoted).total_seconds() <= MAX_BOOK_AGE:
         return {"status": "quote_expired_before_paper_entry"}
-    entry = {"mode": "paper", "event": game["event"], "league": game["league"],
+    entry = {"mode": mode, "event": game["event"], "league": game["league"],
              "official_game_id": game["official_game_id"], "outcome": side,
              "checkpoint": game["official"]["phase"], "period": game["official"]["period"],
              "score_away_home": game["official"]["score_away_home"], "recorded_at": recorded.isoformat(),
              "stake_cap": str(stake), "quote": quote}
+    return {"status": "qualified", "entry": entry}
+
+
+def log_paper_entry(path, game, stake):
+    candidate = halftime_entry(game, stake, "paper")
+    if "entry" not in candidate:
+        return candidate
+    entry = candidate["entry"]
     path.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(path, timeout=5)) as db, db:
         db.execute("""CREATE TABLE IF NOT EXISTS pro_halftime_entries (
@@ -196,7 +215,7 @@ def recent_paper_entries(path, limit=20):
         )]
 
 
-def scan(league, stake, slippage, *, paper_db=None, halftime_only=False):
+def scan(league, stake, slippage, *, paper_db=None, halftime_only=False, live_orders=None):
     artifact = model.load(league)
     if not artifact:
         return {"league": league, "status": "model_unavailable"}
@@ -216,7 +235,7 @@ def scan(league, stake, slippage, *, paper_db=None, halftime_only=False):
         if official is None:
             results.append({**verified, "title": title, "pricing_status": verified["status"]})
             continue
-        if (paper_db is not None or halftime_only) and not at_halftime(league, official):
+        if (paper_db is not None or halftime_only or live_orders is not None) and not at_halftime(league, official):
             row = {**verified, "title": title, "pricing_status": "outside_halftime_checkpoint"}
             if state := model.model_state(league, official):
                 home = model.forecast(state, artifact)
@@ -224,10 +243,17 @@ def scan(league, stake, slippage, *, paper_db=None, halftime_only=False):
             results.append(row)
             continue
         try:
-            row = evaluate(league, event, verified, artifact, stake, slippage)
+            orders = {} if live_orders is not None else None
+            row = evaluate(league, event, verified, artifact, stake, slippage, orders=orders)
         except DATA_ERRORS as exc:
             row = {**verified, "paper": True, "pricing_status": "quote_or_recheck_unavailable", "error": str(exc)}
-        if paper_db is not None:
+        if live_orders is not None:
+            candidate = halftime_entry(row, stake, "live")
+            if entry := candidate.get("entry"):
+                candidate = live_orders.place(entry, orders[entry["outcome"]])
+            row["halftime_live"] = candidate
+            row["paper"] = False
+        elif paper_db is not None:
             row["halftime_paper"] = log_paper_entry(paper_db, row, stake)
         results.append({**row, "title": title})
     return {"league": league, "listings_checked": len(events), "games": results}
