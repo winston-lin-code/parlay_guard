@@ -330,6 +330,15 @@ available. Keep `data/live_orders/pro_halftime.sqlite3` between runs so the
 scanner does not repeat an attempt for the same game, even after a timeout.
 Press Ctrl+C to stop the runner.
 
+To inspect the running dashboard, open a second PowerShell window in the
+repository and run the status check. It uses the local HTTP API and reports
+scanner freshness, NHL/MLB order mode, league status, and the latest ledger
+entry when available. Pass `--port` if your server uses a different port.
+
+```powershell
+python -m src.check_local_server
+```
+
 NBA forecasts and player props require the local NBA history and model
 artifacts used by the regular dashboard. Keep those files when updating
 the checkout.
