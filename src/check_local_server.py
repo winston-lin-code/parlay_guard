@@ -52,6 +52,19 @@ def print_scanners(data, now):
         if halftime.get("warnings"):
             print(f"  Scanner warnings: {len(halftime['warnings'])}")
 
+    wcbb = data.get("wcbb_anytime")
+    if wcbb is not None:
+        live = wcbb.get("live_ordering") is True
+        mode = "REAL-MONEY AUTO ORDERS ENABLED" if live else "PAPER MODE"
+        print(f"WCBB anytime scanner: {mode}")
+        print(f"  Feed: {update_status(wcbb.get('updated_utc'), now, 35)}")
+        if live:
+            orders = wcbb.get("orders", [])
+            print(f"  Recent real orders: {len(orders)}")
+            if orders:
+                latest = orders[0]
+                print(f"  Latest: {latest['side']} | {latest['state']} | {latest.get('order_id', 'no order ID')}")
+
     pro = data.get("pro_halftime")
     if pro is None:
         print("NHL/MLB halftime scanner: status unavailable on this server")

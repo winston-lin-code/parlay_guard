@@ -103,7 +103,9 @@ class ScanState:
                              "scans": [], "entries": [], "paper_logging": False, "live_ordering": False}
         self.pro_halftime_orders = None
         self.wcbb = {"status": "waiting", "updated_utc": None, "games": [], "entries": [],
-                     "performance": wcbb_anytime.performance([]), "warnings": []}
+                     "performance": wcbb_anytime.performance([]), "orders": [], "warnings": []}
+        self.wcbb_orders = None
+        self.wcbb_order_read_error = None
         self.wcbb_settlement_error = None
         self.cs2 = {"updated_utc": None, "games": [], "warnings": [], "rating_sources": [], "round_feed": False}
         self.college = {"updated_utc": None, "games": [], "opportunities": [], "warnings": []}
@@ -189,12 +191,12 @@ class ScanState:
         while not self.stop.is_set():
             started = time.monotonic()
             try:
-                value = wcbb_anytime.scan(ledger, start_index=start_index)
+                value = wcbb_anytime.scan(ledger, start_index=start_index, live_orders=self.wcbb_orders)
                 start_index += 1
             except Exception as exc:
                 with self.lock:
                     value = {**self.wcbb, "status": "feed_unavailable", "updated_utc": None, "games": [],
-                             "warnings": [f"WCBB paper scan unavailable ({type(exc).__name__})."]}
+                             "warnings": [f"WCBB scan unavailable ({type(exc).__name__})."]}
             with self.lock:
                 self.wcbb = value
             self.stop.wait(max(3, 12 - (time.monotonic() - started)))
@@ -206,8 +208,15 @@ class ScanState:
                 error = None
             except (sqlite3.Error, ValueError, OSError) as exc:
                 error = f"WCBB settlements unavailable ({type(exc).__name__})."
+            order_error = None
+            if self.wcbb_orders is not None:
+                try:
+                    self.wcbb_orders.refresh()
+                except Exception as exc:
+                    order_error = f"WCBB order status could not be refreshed ({type(exc).__name__})."
             with self.lock:
                 self.wcbb_settlement_error = error
+                self.wcbb_order_read_error = order_error
             self.stop.wait(60)
 
     def cs2_loop(self):
@@ -290,8 +299,8 @@ class ScanState:
             quotes, scores = dict(self.moneyline_quotes), dict(self.scores)
             halftime = dict(self.halftime)
             pro_halftime = dict(self.pro_halftime)
-            wcbb = dict(self.wcbb)
-            wcbb_settlement_error = self.wcbb_settlement_error
+            wcbb = {**self.wcbb, "live_ordering": self.wcbb_orders is not None}
+            wcbb_errors = (self.wcbb_settlement_error, self.wcbb_order_read_error)
             cs2 = self.cs2
         now = datetime.now(timezone.utc)
         fresh, games, observations = [], [], []
@@ -350,8 +359,8 @@ class ScanState:
             coverage[key] = sum(game.get(key, 0) for game in games)
         halftime["picks"] = [pick for pick in halftime["picks"]
                              if -5 <= (now - utc(pick["quote_utc"])).total_seconds() <= BOOK_MAX_AGE]
-        if wcbb_settlement_error:
-            wcbb["warnings"] = [*wcbb["warnings"], wcbb_settlement_error]
+        if any(wcbb_errors):
+            wcbb["warnings"] = [*wcbb["warnings"], *(error for error in wcbb_errors if error)]
         return {**snapshot, "catalog": catalog, "sports": sports, "stale": not observations,
                 "updated_utc": max(observations).isoformat() if observations else snapshot.get("updated_utc"),
                 "coverage": coverage, "games": games, "opportunities": ranked, "top_picks": picks,

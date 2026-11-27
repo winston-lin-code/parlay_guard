@@ -1,4 +1,4 @@
-"""Paper replay of the WCBB anytime rule against live ESPN and Polymarket US data."""
+"""Screen live ESPN and Polymarket US data for the WCBB anytime rule."""
 
 from bisect import bisect_right
 from concurrent.futures import ThreadPoolExecutor
@@ -11,11 +11,12 @@ import sqlite3
 
 from . import halftime_paper
 from .inplay_scan import PROBABILITY_HAIRCUT, read_json, utc
-from .pro_live_ev import best_paper_quote
+from .pro_live_ev import best_order_quote
 from .us_wager import (BOOK_MAX_AGE, EVENT_CACHE_MAX_AGE, GATEWAY, ONE, SCANNER_BOOKS, SLUG,
                        BookRateLimited, decimal, public)
 
 DB_PATH = Path("data/paper_trades/wcbb_anytime.sqlite3")
+LIVE_DB_PATH = Path("data/live_orders/wcbb_anytime.sqlite3")
 LEAGUE = "WCBB"
 STAKE = Decimal("5.00")
 MIN_PRICE = Decimal(".20")
@@ -100,15 +101,18 @@ def moneyline_url(event, market):
     return None
 
 
-def scan_game(game, listings, previous):
+def scan_game(game, listings, previous, *, live=False):
     away, home = (game["teams"][key] for key in ("away", "home"))
     row = {"game_id": game["id"], "title": f"{display_team(away)} vs {display_team(home)}",
            "score": f"{away['abbreviation']} {game['scores']['away']} · {home['abbreviation']} {game['scores']['home']}",
            "checkpoint": game["checkpoint"], "clock": game["clock_text"], "status": "unmatched_market"}
     if game["id"] in previous:
         entry = previous[game["id"]]
-        return {**row, "status": "paper_entry_logged", "side": entry["side"],
-                "market_url": moneyline_url(entry.get("event"), entry.get("market"))}, None
+        row.update(status="live_order_already_attempted" if live else "paper_entry_logged", side=entry["side"],
+                   market_url=moneyline_url(entry.get("event"), entry.get("market")))
+        if live:
+            row["order_state"] = entry["state"]
+        return row, None
     try:
         if listings is None:
             return {**row, "status": "market_catalog_unavailable"}, None
@@ -163,9 +167,10 @@ def scan_game(game, listings, previous):
         row["ask"] = float(ask)
         if ask < MIN_PRICE:
             return {**row, "status": "below_price"}, None
-        quote = best_paper_quote(contract, market_side, float(probability), book, STAKE, SLIPPAGE, now())
-        if not quote:
+        order_quote = best_order_quote(contract, market_side, float(probability), book, STAKE, SLIPPAGE, now())
+        if not order_quote:
             return {**row, "status": "insufficient_depth"}, None
+        order, quote = order_quote
         cost = decimal(quote["total_estimate"])
         ev = (probability - decimal(PROBABILITY_HAIRCUT)) * quote["quantity"] / cost - ONE
         row.update(limit=float(quote["limit"]), screened_ev=float(ev), cost=float(cost))
@@ -175,7 +180,8 @@ def scan_game(game, listings, previous):
                  "title": row["title"], "side": row["side"], "long": long, "quote_utc": quoted.isoformat(),
                  "score_utc": score_at.isoformat(), "checkpoint": row["checkpoint"], "clock": row["clock"],
                  "probability": row["probability"], "screened_ev": float(ev), "ask": row["ask"], "limit": quote["limit"],
-                 "fee": quote["fee_estimate"], "cost": quote["total_estimate"], "quantity": quote["quantity"]}
+                 "fee": quote["fee_estimate"], "cost": quote["total_estimate"], "quantity": quote["quantity"],
+                 "order": order}
         return {**row, "status": "pending_recheck"}, entry
     except halftime_paper.FEED_ERRORS:
         return {**row, "status": "pricing_unavailable"}, None
@@ -278,7 +284,7 @@ def scoreboards(days):
     return events
 
 
-def scan(path, *, start_index=0):
+def scan(path, *, start_index=0, live_orders=None):
     started = now().astimezone(halftime_paper.ET)
     day = started.date()
     days = (day - timedelta(days=1), day) if started.hour < 6 else (day,)
@@ -288,7 +294,7 @@ def scan(path, *, start_index=0):
     start_window = (earliest.astimezone(timezone.utc), latest.astimezone(timezone.utc))
     warnings = []
     ledger = read_ledger(path)
-    previous = {row["game_id"]: row for row in ledger}
+    live = live_orders is not None
     with ThreadPoolExecutor(max_workers=8) as pool:
         inventory = pool.submit(halftime_paper.live_inventory, LEAGUE, start_window=start_window)
         try:
@@ -304,11 +310,12 @@ def scan(path, *, start_index=0):
         else:
             market_list = listings.get(LEAGUE, [])
         ids = list(games)
+        previous = live_orders.attempts(LEAGUE, ids) if live else {row["game_id"]: row for row in ledger}
         offset = start_index % len(ids) if ids else 0
         order = ids[offset:] + ids[:offset]
         # A busy venue can exhaust the first part of a scan. Rotate the
         # request order between passes while preserving the dashboard order.
-        completed = dict(zip(order, pool.map(lambda key: scan_game(games[key], market_list, previous), order)))
+        completed = dict(zip(order, pool.map(lambda key: scan_game(games[key], market_list, previous, live=live), order)))
         results = [completed[key] for key in ids]
     candidates = [entry for _, entry in results if entry]
     verified = {}
@@ -328,10 +335,26 @@ def scan(path, *, start_index=0):
                 or not 0 <= (recorded - utc(entry["quote_utc"])).total_seconds() <= BOOK_MAX_AGE):
             row["status"] = "state_changed"
             continue
-        record_entry(path, {**entry, "recorded_at": recorded.isoformat()})
-        row["status"] = "paper_entry_logged"
-    ledger = read_ledger(path) if candidates else ledger
+        entry["recorded_at"] = recorded.isoformat()
+        payload = entry.pop("order")
+        if live:
+            attempt = {**entry, "league": LEAGUE, "official_game_id": entry["game_id"],
+                       "quote": {"quote_utc": entry["quote_utc"], "total_estimate": entry["cost"]}}
+            outcome = live_orders.place(attempt, payload)
+            row["status"] = outcome["status"]
+            row["order_state"] = outcome.get("state")
+        else:
+            record_entry(path, entry)
+            row["status"] = "paper_entry_logged"
+    if live:
+        orders = [{**entry, "market_url": moneyline_url(entry.get("event"), entry.get("market"))}
+                  for entry in live_orders.recent()]
+        if any(entry["state"] in ("pending", "unknown") for entry in orders):
+            warnings.append("A WCBB order has an unknown status. Check your Polymarket US activity.")
+    else:
+        ledger = read_ledger(path) if candidates else ledger
+        orders = []
     return {"status": "feed_unavailable" if warnings else "ready", "updated_utc": now().isoformat(),
             "games": [row for row, _ in results], "performance": performance(ledger),
             "entries": [{**entry, "market_url": moneyline_url(entry.get("event"), entry.get("market"))}
-                        for entry in ledger[:25]], "warnings": warnings}
+                        for entry in ledger[:25]], "live_ordering": live, "orders": orders, "warnings": warnings}

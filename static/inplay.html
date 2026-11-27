@@ -163,7 +163,7 @@ details > summary { color: var(--muted); font-size: .84rem; }
     </div>
   </section>
   <section class="panel" id="wcbb-panel" aria-labelledby="wcbb-heading" hidden>
-    <header class="list-header"><h2 id="wcbb-heading">Women’s College Basketball Anytime</h2><p>Polymarket US · Paper bets</p></header>
+    <header class="list-header"><h2 id="wcbb-heading">Women’s College Basketball Anytime</h2><p id="wcbb-mode">Polymarket US · Paper bets</p></header>
     <div class="section">
       <p class="muted">First qualifying moneyline per game · Win probability above 60% · Screened EV at least 5% · 20¢ minimum ask · $5 all-in cap</p>
       <p class="muted">Screen includes a five-point probability haircut, estimated fees, and 1¢ per share in slippage.</p>
@@ -174,6 +174,11 @@ details > summary { color: var(--muted); font-size: .84rem; }
       <label class="muted"><input id="wcbb-listed-only" type="checkbox"> Show only games with a US moneyline</label>
       <p class="muted" id="wcbb-status" role="status">Waiting for the WCBB scan</p>
       <ul class="alt-list" id="wcbb-games"></ul>
+    </div>
+    <div class="section" id="wcbb-live-history" hidden>
+      <div class="section-title"><h3>Recent real-money orders</h3></div>
+      <p class="muted" id="wcbb-orders-empty">No real-money orders recorded.</p>
+      <ul class="alt-list" id="wcbb-orders"></ul>
     </div>
     <div class="section">
       <div class="section-title"><h3>Recent paper entries</h3></div>
@@ -730,6 +735,11 @@ const wcbbStatus = {
   below_ev: 'Screened EV below 5%',
   pricing_unavailable: 'Pricing feed unavailable',
   state_changed: 'Score, clock, or quote changed during recheck',
+  live_order_already_attempted: 'Order attempt already recorded',
+  live_order_recorded: 'Order recorded',
+  live_order_unknown: 'Order state unknown',
+  quote_expired_before_order: 'Quote expired before order',
+  outside_live_stake_cap: 'Order exceeds $5 cap',
 };
 const dollars = new Intl.NumberFormat('en-US', {style:'currency', currency:'USD'});
 const entryTime = new Intl.DateTimeFormat(undefined, {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
@@ -745,6 +755,7 @@ function addWcbbMarketLink(info, url) {
 
 function renderWcbb(now, query) {
   const scan = snapshot.wcbb_anytime;
+  const live = Boolean(scan?.live_ordering);
   const current = !offline && fresh(scan?.updated_utc, now);
   const matches = row => !query || (row.title + ' ' + (row.side || '')).toLowerCase().includes(query);
   const rows = current ? (scan.games || []).filter(matches) : [];
@@ -752,30 +763,36 @@ function renderWcbb(now, query) {
   const listed = rows.filter(row => row.market_url);
   const games = (listedOnly ? listed : rows).map(row => {
     if (!row.quote_utc || age(row.quote_utc, now) <= 15000) return row;
+    const recorded = row.status === 'paper_entry_logged' || row.status.startsWith('live_order_');
     return {...row, ask:null, screened_ev:null, probability:null,
-      status:row.status === 'paper_entry_logged' ? row.status : 'no_fresh_book'};
+      status:recorded ? row.status : 'no_fresh_book'};
   });
   const entries = (scan?.entries || []).filter(matches);
+  const orders = (scan?.orders || []).filter(matches);
   const totals = scan?.performance || {};
-  const notice = offline ? 'Connection interrupted. Showing the last received paper ledger.'
+  const notice = offline ? 'Connection interrupted. Showing the last received ledger.'
     : (scan?.warnings || []).join(' ') || (!current ? 'Waiting for the WCBB scan'
       : games.length ? '' : rows.length && listedOnly ? 'No verified US moneylines for the games shown.'
         : (scan.games.length ? 'No live games match your search.' : 'No live WCBB games right now.'));
   text('wcbb-status', notice);
   $('wcbb-status').hidden = !notice;
+  text('wcbb-mode', live ? 'Polymarket US · Real-money auto orders' : 'Polymarket US · Paper bets');
+  $('wcbb-live-history').hidden = !live;
+  $('wcbb-orders-empty').hidden = orders.length > 0;
+  text('wcbb-orders-empty', scan?.orders?.length ? 'No orders match your search.' : 'No real-money orders recorded.');
   text('wcbb-count', current ? games.length + ' shown · ' + listed.length + ' US moneyline' + (listed.length === 1 ? '' : 's') : '');
   $('wcbb-empty').hidden = entries.length > 0;
   text('wcbb-empty', (scan?.entries || []).length ? 'No entries match your search.' : 'No paper entries yet.');
-  const key = JSON.stringify([totals, games, entries]);
+  const key = JSON.stringify([totals, games, entries, orders]);
   if (key === wcbbFingerprint) return;
   wcbbFingerprint = key;
   const money = value => Number.isFinite(value) ? dollars.format(value) : '—';
   const wins = totals.wins || 0;
   const settled = wins + (totals.losses || 0);
   const record = [wins + '–' + (totals.losses || 0), totals.other ? totals.other + ' other' : ''].filter(Boolean).join(' · ');
-  const metrics = [['Record', record], ['Win rate', settled ? pct(wins / settled) : '—'],
-    ['Open entries', String(totals.open || 0)], ['Net paper P&L', money(totals.net_profit)],
-    ['Settled ROI', edge(totals.roi)], ['Max drawdown', money(totals.max_drawdown)]];
+  const metrics = [['Paper record', record], ['Paper win rate', settled ? pct(wins / settled) : '—'],
+    ['Open paper entries', String(totals.open || 0)], ['Net paper P&L', money(totals.net_profit)],
+    ['Settled paper ROI', edge(totals.roi)], ['Paper max drawdown', money(totals.max_drawdown)]];
   $('wcbb-performance').replaceChildren(...metrics.map(([label, value]) => {
     const item = element('div', '', 'metric');
     item.append(element('dt', label), element('dd', value));
@@ -785,7 +802,8 @@ function renderWcbb(now, query) {
     const row = element('li', '');
     const info = element('div', '');
     info.append(element('p', game.title, 'selection'),
-      element('p', [game.score, game.checkpoint, game.clock, wcbbStatus[game.status],
+      element('p', [game.score, game.checkpoint, game.clock,
+        game.order_state ? readableStatus(game.order_state) : wcbbStatus[game.status],
         game.retry_after_seconds ? 'Retry window ' + game.retry_after_seconds + 's' : '',
         game.book_age_seconds ? 'Book age ' + game.book_age_seconds + 's' : '',
       ].filter(Boolean).join(' · '), 'muted'));
@@ -795,6 +813,21 @@ function renderWcbb(now, query) {
     if (Number.isFinite(game.probability)) numbers.append(element('small', 'Win probability ' + pct(game.probability)));
     if (Number.isFinite(game.ask)) numbers.append(element('small', 'Best ask ' + price(game.ask)));
     if (Number.isFinite(game.screened_ev)) numbers.append(element('small', 'Screened EV ' + edge(game.screened_ev)));
+    row.append(info, numbers);
+    return row;
+  }));
+  $('wcbb-orders').replaceChildren(...orders.map(order => {
+    const row = element('li', '');
+    const info = element('div', '');
+    info.append(element('p', order.side + ' moneyline', 'selection'),
+      element('p', [order.title, entryTime.format(new Date(order.recorded_at)), order.checkpoint, order.clock].filter(Boolean).join(' · '), 'muted'),
+      element('p', 'Win probability ' + pct(order.probability) + ' · Screened EV ' + edge(order.screened_ev), 'muted'));
+    addWcbbMarketLink(info, order.market_url);
+    const numbers = element('div', '', 'numbers');
+    numbers.append(element('p', readableStatus(order.state)),
+      element('small', order.quantity + ' shares requested at ' + price(Number(order.limit)) + ' limit · ' + money(Number(order.cost)) + ' screened cost'));
+    if (Number.isInteger(order.filled_quantity)) numbers.append(element('small', order.filled_quantity + ' shares filled'));
+    if (order.order_id) numbers.append(element('small', 'Order ' + order.order_id));
     row.append(info, numbers);
     return row;
   }));

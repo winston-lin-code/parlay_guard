@@ -1,8 +1,12 @@
+from base64 import b64encode
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
+import sys
+from types import SimpleNamespace
 
 import pytest
 
-from src import wcbb_anytime as paper
+from src import env_config, pro_halftime_orders, run_research, wcbb_anytime as paper
 from src.inplay_api import ScanState
 
 NOW = datetime(2026, 11, 27, 18, tzinfo=timezone.utc)
@@ -222,3 +226,97 @@ def test_settlement_batches_existing_entries_by_exact_market_slug(monkeypatch, t
     paper.settle(path)
     assert requests[1] == [requests[0][2], requests[0][3]]
     assert paper.read_ledger(path) == entries
+
+
+def test_live_scanner_rechecks_state_and_records_a_single_capped_order(monkeypatch, tmp_path):
+    path = tmp_path / "paper.sqlite3"
+    live_path = tmp_path / "live.sqlite3"
+    contract, summary, book = inputs(4, .75, ".50")
+    monkeypatch.setattr(paper, "now", lambda: NOW)
+    monkeypatch.setattr(pro_halftime_orders, "now", lambda: NOW)
+    monkeypatch.setattr(paper.halftime_paper, "live_inventory",
+                        lambda league, *, start_window: ({"WCBB": [(EVENT, contract)]}, []))
+    monkeypatch.setattr(paper, "read_json", lambda *args, **kwargs: summary)
+    monkeypatch.setattr(paper.SCANNER_BOOKS, "read", lambda *args, **kwargs: book)
+    calls = iter([fixture(4), fixture(4, 18), fixture(4), fixture(4), fixture(4)])
+    monkeypatch.setattr(paper.halftime_paper, "scores", lambda *args: [next(calls)])
+    submitted = []
+
+    def submit(payload):
+        submitted.append(payload)
+        return {"id": "order-123"}
+
+    def retrieve(order_id):
+        assert order_id == "order-123"
+        return {"order": {"id": order_id, "marketSlug": MARKET, "state": "ORDER_STATE_FILLED", "cumQuantity": 9}}
+
+    def client():
+        return nullcontext(SimpleNamespace(orders=SimpleNamespace(create=submit, retrieve=retrieve)))
+
+    ledger = pro_halftime_orders.AutomaticOrders(live_path, client, max_book_age=paper.BOOK_MAX_AGE)
+    changed = paper.scan(path, live_orders=ledger)
+    assert changed["games"][0]["status"] == "state_changed"
+    assert changed["orders"] == [] and not submitted
+
+    accepted = paper.scan(path, live_orders=ledger)
+    assert accepted["live_ordering"] is True
+    assert accepted["games"][0]["status"] == "live_order_recorded"
+    assert accepted["entries"] == [] and not path.exists()
+    entry, = accepted["orders"]
+    assert entry["state"] == "submitted"
+    assert "filled_quantity" not in entry
+    assert entry["market_url"] == paper.moneyline_url(EVENT, MARKET)
+    assert .60 < entry["probability"] and entry["screened_ev"] >= .05
+    assert float(entry["cost"]) <= 5 and entry["quantity"] == 9
+    assert submitted == [{"marketSlug": MARKET, "type": "ORDER_TYPE_LIMIT",
+                          "price": {"value": "0.50", "currency": "USD"}, "quantity": 9,
+                          "tif": "TIME_IN_FORCE_FILL_OR_KILL", "intent": "ORDER_INTENT_BUY_SHORT",
+                          "manualOrderIndicator": "MANUAL_ORDER_INDICATOR_AUTOMATIC", "synchronousExecution": True}]
+
+    restarted = pro_halftime_orders.AutomaticOrders(live_path, client)
+    restarted.refresh()
+    repeat = paper.scan(path, live_orders=restarted)
+    assert repeat["games"][0]["status"] == "live_order_already_attempted"
+    assert repeat["orders"][0]["state"] == "ORDER_STATE_FILLED"
+    assert repeat["orders"][0]["filled_quantity"] == 9
+    assert len(submitted) == 1
+
+
+@pytest.mark.parametrize("auth_ok", [True, False])
+def test_dashboard_runner_enables_only_wcbb_live_after_auth_check(monkeypatch, tmp_path, auth_ok):
+    for name in (run_research.KEY_ID_VAR, run_research.SECRET_VAR, "POLYMARKET_KEY_ID", "POLYMARKET_SECRET_KEY",
+                 "PG_DISABLE_AUTO_REFRESH", "PG_ENABLE_PRO_HALFTIME_PAPER", "PARLAY_GUARD_US_ORDERS"):
+        monkeypatch.delenv(name, raising=False)
+    secret = b64encode(bytes(32)).decode()
+    env = tmp_path / ".env"
+    env.write_text(f"{run_research.KEY_ID_VAR}=test-wcbb\n{run_research.SECRET_VAR}={secret}\n")
+    monkeypatch.setattr(env_config, "PROJECT_ENV", env)
+    monkeypatch.setattr(run_research, "ROOT", tmp_path)
+
+    def balances():
+        if not auth_ok:
+            raise OSError("mocked connection failure")
+        return {"balances": []}
+
+    def sdk_client(*, key_id, secret_key, timeout, max_retries):
+        assert (key_id, secret_key, max_retries) == ("test-wcbb", secret, 0)
+        return nullcontext(SimpleNamespace(account=SimpleNamespace(balances=balances)))
+
+    app = object()
+    scanner = ScanState()
+    started = []
+    monkeypatch.setitem(sys.modules, "polymarket_us", SimpleNamespace(PolymarketUS=sdk_client))
+    monkeypatch.setitem(sys.modules, "src.api", SimpleNamespace(app=app, inplay_scanner=scanner))
+    monkeypatch.setattr(run_research.uvicorn, "run", lambda value, **_: started.append(value))
+    monkeypatch.setattr(sys, "argv", ["run_research", "--live-wcbb"])
+    if auth_ok:
+        run_research.main()
+        assert started == [app]
+        assert scanner.wcbb_orders.path == tmp_path / paper.LIVE_DB_PATH
+        assert scanner.read()["wcbb_anytime"]["live_ordering"]
+    else:
+        with pytest.raises(SystemExit) as error:
+            run_research.main()
+        assert error.value.code == 2
+        assert not started and scanner.wcbb_orders is None
+    assert scanner.pro_halftime_orders is None
