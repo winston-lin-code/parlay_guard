@@ -150,7 +150,7 @@ class ScanState:
         while not self.stop.is_set():
             started = time.monotonic()
             try:
-                value = screen_halftime()
+                value = screen_halftime(book_stream=self.wcbb_books)
             except Exception as exc:
                 value = {"updated_utc": None, "leagues": list(HALFTIME_LEAGUES), "picks": [],
                          "warnings": [f"Halftime screen unavailable: {type(exc).__name__}"]}

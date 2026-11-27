@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -114,11 +115,51 @@ def test_scoreboard_recheck_removes_picks_after_halftime_and_ranks_current_games
     monkeypatch.setattr(paper, "live_inventory", lambda: ({}, []))
     monkeypatch.setattr(paper, "scores", lambda league, day: next(responses)
                         if league == "NBA" and day.isoformat() == "2026-11-25" else [])
-    monkeypatch.setattr(paper, "price_game", lambda game: {
+    monkeypatch.setattr(paper, "price_game", lambda game, **kwargs: {
         "event": game["id"], "probability": .7, "quote_utc": NOW.isoformat(),
         "screened_ev": {"1": .7, "2": .1, "3": .25}[game["id"]],
     })
     assert [pick["event"] for pick in paper.screen_halftime()["picks"]] == ["3", "2"]
+
+
+def test_halftime_uses_streamed_book_during_rest_cooldown_and_reports_separate_errors(monkeypatch, clock):
+    leagues = {"CBB": 1, "CFB": 2, "WCBB": 2, "WNBA": 2}
+    slugs = {league: f"{league.lower()}-pho-hou-2026-11-25" for league in leagues}
+
+    def scores(league, day):
+        if league not in leagues or day.isoformat() != "2026-11-25":
+            return []
+        fixture = event()
+        fixture["id"] = league
+        fixture["competitions"][0]["status"]["period"] = leagues[league]
+        return [fixture]
+
+    def probability(game, now):
+        if game["league"] == "WNBA":
+            raise ValueError("model failed")
+        return .70
+
+    def book_request(path, fetch, *, fresh_book):
+        assert fresh_book is True and fetch is paper.public
+        assert path in {f"/v1/markets/aec-{slugs[league]}/book" for league in ("CBB", "CFB")}
+        raise paper.BookRateLimited(10)
+
+    def stream_book(slug, *, clock, max_age):
+        assert max_age == paper.BOOK_MAX_AGE and clock() == NOW
+        return {**order_book(), "marketSlug": slug} if slug == "aec-" + slugs["WCBB"] else None
+
+    contracts = {league: [(slug, {**market(), "slug": "aec-" + slug, "sportsMarketType": (
+        "football_team_full_game_winner" if league == "CFB" else "basketball_team_full_game_winner")})]
+                 for league, slug in slugs.items()}
+    monkeypatch.setattr(paper, "live_inventory", lambda: (contracts, []))
+    monkeypatch.setattr(paper, "scores", scores)
+    monkeypatch.setattr(paper, "home_probability", probability)
+    monkeypatch.setattr(paper.SCANNER_BOOKS, "request", book_request)
+
+    result = paper.screen_halftime(book_stream=SimpleNamespace(latest=stream_book))
+    assert [row["league"] for row in result["picks"]] == ["WCBB"]
+    assert result["warnings"] == ["Polymarket US rate-limited halftime order books for CBB, CFB",
+                                   "WNBA halftime win-probability model unavailable"]
 
 
 def test_api_never_surfaces_expired_halftime_quotes():

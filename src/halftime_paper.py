@@ -20,7 +20,8 @@ from .nfl_inplay_model import forecast as nfl_forecast, load as load_nfl
 from .nfl_inplay_scan import NFL_SCOREBOARD
 from .predict_today import ET
 from .tennis_live import ITF_LEAGUES
-from .us_wager import BOOK_MAX_AGE, CENT, GATEWAY, ONE, SLUG, STANDARD_FEE, WagerError, contract_url, decimal, name, public, team_names
+from .us_wager import (BOOK_MAX_AGE, CENT, GATEWAY, ONE, SCANNER_BOOKS, SLUG, STANDARD_FEE,
+                       BookRateLimited, WagerError, contract_url, decimal, name, public, team_names)
 
 PAPER_STAKE = Decimal("2")
 MIN_PROBABILITY = 0.60
@@ -39,6 +40,10 @@ US_ALIASES = {
     "GSW": "gs", "NOP": "no", "NYK": "ny", "PHX": "pho", "SAS": "sa", "WSH": "was",
     "JAC": "jax",
 }
+
+
+class HalftimePricingError(ValueError):
+    """A safe, user-facing explanation of which stage failed."""
 
 
 def game_state(league, event):
@@ -300,13 +305,19 @@ def paper_quote(book, slug, long, now):
     return None
 
 
-def price_game(game):
-    probability = home_probability(game, datetime.now(timezone.utc))
+def price_game(game, *, book_stream=None):
+    try:
+        probability = home_probability(game, datetime.now(timezone.utc))
+    except FEED_ERRORS as exc:
+        raise HalftimePricingError("win-probability model unavailable") from exc
     if probability is None or not (MIN_PROBABILITY <= probability <= 1 or 0 <= probability <= 1 - MIN_PROBABILITY):
         return None
     selected = "home" if probability >= MIN_PROBABILITY else "away"
     p = probability if selected == "home" else 1 - probability
-    listing = contract_and_sides(game)
+    try:
+        listing = contract_and_sides(game)
+    except FEED_ERRORS as exc:
+        raise HalftimePricingError("moneyline lookup unavailable from Polymarket US") from exc
     if listing is None:
         return None
     event, market, sides = listing
@@ -314,27 +325,44 @@ def price_game(game):
     side = next(side for side in market["marketSides"] if side["long"] is long)
     if side.get("tradable") is not True:
         return None
-    book = public(f"/v1/markets/{market['slug']}/book", fresh_book=True)["marketData"]
-    quote = paper_quote(book, market["slug"], long, datetime.now(timezone.utc))
+    def clock():
+        return datetime.now(timezone.utc)
+
+    slug = market["slug"]
+    try:
+        book = book_stream.latest(slug, clock=clock, max_age=BOOK_MAX_AGE) if book_stream is not None else None
+        if book is None:
+            book = SCANNER_BOOKS.request(f"/v1/markets/{slug}/book", public, fresh_book=True)
+        quote = paper_quote(book, slug, long, clock())
+    except BookRateLimited:
+        raise
+    except FEED_ERRORS as exc:
+        raise HalftimePricingError("order book unavailable from Polymarket US") from exc
     if quote is None:
         return None
     screened_ev = (p - PROBABILITY_HAIRCUT) / quote["cost"] - 1
     if screened_ev < MIN_SCREENED_EV:
         return None
+    try:
+        url = contract_url(event, market, long)
+    except WagerError as exc:
+        raise HalftimePricingError("outcome link unavailable from Polymarket US") from exc
     away, home = (game["teams"][key] for key in ("away", "home"))
+    labels = {key: team.get("shortDisplayName") or team.get("displayName") or team["abbreviation"]
+              for key, team in game["teams"].items()}
     return {**quote, "event": event["slug"], "league": game["league"],
-            "title": f"{away['shortDisplayName']} @ {home['shortDisplayName']}",
+            "title": f"{labels['away']} @ {labels['home']}",
             "score_text": f"{away['abbreviation']} {game['scores']['away']} · {home['abbreviation']} {game['scores']['home']}",
             "checkpoint": game["checkpoint"], "clock_text": game["clock_text"],
-            "side": game["teams"][selected]["shortDisplayName"], "probability": p,
-            "screened_ev": screened_ev, "url": contract_url(event, market, long)}
+            "side": labels[selected], "probability": p, "screened_ev": screened_ev, "url": url}
 
 
-def screen_halftime():
+def screen_halftime(*, book_stream=None):
     started = datetime.now(timezone.utc)
     day = started.astimezone(ET).date()
     days = (day - timedelta(days=1), day) if started.astimezone(ET).hour < 6 else (day,)
     warnings = set()
+    throttled = set()
 
     def fetch(league, date):
         try:
@@ -345,11 +373,16 @@ def screen_halftime():
             return {}
 
     def price(game):
+        prefix = f"{game['league']} halftime"
         try:
-            return price_game(game)
+            return price_game(game, book_stream=book_stream)
+        except BookRateLimited:
+            throttled.add(game["league"])
+        except HalftimePricingError as exc:
+            warnings.add(f"{prefix} {exc}")
         except FEED_ERRORS:
-            warnings.add(f"{game['league']} halftime pricing partially unavailable")
-            return None
+            warnings.add(f"{prefix} pricing response incomplete")
+        return None
 
     with ThreadPoolExecutor(max_workers=6) as pool:
         keys = [(league, date) for league in LEAGUES for date in days]
@@ -368,6 +401,8 @@ def screen_halftime():
                   for key, pick in picks.items() if pick}
         verified = {key: game for slate in pool.map(lambda key: fetch(*key), sorted(needed))
                     for key, game in slate.items()}
+    if throttled:
+        warnings.add(f"Polymarket US rate-limited halftime order books for {', '.join(sorted(throttled))}")
     now = datetime.now(timezone.utc)
     rows = [pick for key, pick in picks.items() if pick and key in verified
             and games[key]["scores"] == verified[key]["scores"]
