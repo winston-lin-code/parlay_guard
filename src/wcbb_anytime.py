@@ -12,7 +12,8 @@ import sqlite3
 from . import halftime_paper
 from .inplay_scan import PROBABILITY_HAIRCUT, read_json, utc
 from .pro_live_ev import best_paper_quote
-from .us_wager import BOOK_MAX_AGE, ONE, SCANNER_BOOKS, SLUG, BookRateLimited, decimal, public
+from .us_wager import (BOOK_MAX_AGE, EVENT_CACHE_MAX_AGE, GATEWAY, ONE, SCANNER_BOOKS, SLUG,
+                       BookRateLimited, decimal, public)
 
 DB_PATH = Path("data/paper_trades/wcbb_anytime.sqlite3")
 LEAGUE = "WCBB"
@@ -22,6 +23,7 @@ MIN_PROBABILITY = Decimal(".60")
 MIN_EV = Decimal(".05")
 SLIPPAGE = Decimal(".01")
 SCORE_DELAY = 15
+SETTLEMENT_BATCH_SIZE = 50
 SUMMARY_URL = ("https://site.api.espn.com/apis/site/v2/sports/basketball/"
                "womens-college-basketball/summary")
 
@@ -201,33 +203,50 @@ def read_ledger(path):
                     "SELECT detail, settlement, settled_at FROM wcbb_entries ORDER BY recorded_at DESC, game_id")]
 
 
-def settle(path):
-    oldest = now() - timedelta(minutes=45)
-    pending = [entry for entry in read_ledger(path)
-               if entry["settlement"] is None and utc(entry["recorded_at"]) <= oldest]
-
-    def get_settlement(entry):
-        try:
-            market = public(f"/v1/markets/slug/{entry['market']}")["market"]
-            if market.get("slug") != entry["market"] or market.get("status") != "MARKET_STATUS_RESOLVED":
-                return None
-            result = public(f"/v1/markets/{entry['market']}/settlement")
-            if result.get("slug") == entry["market"]:
-                price = decimal(result["settlement"])
-                if 0 <= price <= 1:
-                    return str(price if entry["long"] else ONE - price), now().isoformat(), entry["game_id"]
-        except halftime_paper.FEED_ERRORS:
-            pass
+def settled_payout(market, long):
+    if market.get("status") != "MARKET_STATUS_RESOLVED":
         return None
+    sides = market.get("marketSides")
+    if not isinstance(sides, list) or len(sides) != 2:
+        return None
+    prices = {}
+    for side in sides:
+        if not isinstance(side, dict) or type(side.get("long")) is not bool:
+            return None
+        try:
+            prices[side["long"]] = decimal(side.get("price"))
+        except ValueError:
+            return None
+    if len(prices) != 2 or any(not 0 <= price <= ONE for price in prices.values()) or sum(prices.values()) != ONE:
+        return None
+    return prices[long]
 
-    if not pending:
-        return
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        updates = [result for result in pool.map(get_settlement, pending) if result]
-    if updates:
-        with closing(sqlite3.connect(path, timeout=5)) as db, db:
-            db.executemany("UPDATE wcbb_entries SET settlement=?, settled_at=? WHERE game_id=? AND settlement IS NULL",
-                           updates)
+
+def settle(path):
+    pending = {entry["market"]: entry for entry in read_ledger(path)
+               if entry["settlement"] is None and type(entry.get("long")) is bool
+               and moneyline_url(entry.get("event"), entry.get("market"))}
+    slugs = list(pending)
+    for offset in range(0, len(slugs), SETTLEMENT_BATCH_SIZE):
+        batch = slugs[offset:offset + SETTLEMENT_BATCH_SIZE]
+        # Resolved markets may be absent from /markets/slug/{slug}; the batch feed includes them.
+        payload = read_json("GET", f"{GATEWAY}/v1/markets", max_age=EVENT_CACHE_MAX_AGE,
+                            params={"slug": batch, "limit": len(batch)})
+        if not isinstance(payload, dict) or not isinstance(payload.get("markets"), list):
+            raise ValueError("Polymarket US omitted markets from the settlement response.")
+        settled_at = now().isoformat()
+        updates = []
+        for market in payload["markets"]:
+            if not isinstance(market, dict) or market.get("slug") not in batch:
+                continue
+            entry = pending[market["slug"]]
+            payout = settled_payout(market, entry["long"])
+            if payout is not None:
+                updates.append((str(payout), settled_at, entry["game_id"]))
+        if updates:
+            with closing(sqlite3.connect(path, timeout=5)) as db, db:
+                db.executemany("UPDATE wcbb_entries SET settlement=?, settled_at=? WHERE game_id=? AND settlement IS NULL",
+                               updates)
 
 
 def performance(entries):

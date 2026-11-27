@@ -165,15 +165,20 @@ def test_scan_persists_once_and_uses_exchange_settlement(monkeypatch, tmp_path):
     repeat = paper.scan(path)
     assert len(repeat["entries"]) == 1
     assert repeat["games"][0]["market_url"] == repeat["entries"][0]["market_url"] == paper.moneyline_url(EVENT, MARKET)
-    monkeypatch.setattr(paper, "now", lambda: NOW + timedelta(minutes=60))
-    def market_result(status):
-        return lambda route: ({"slug": MARKET, "settlement": "0"} if route.endswith("/settlement")
-                              else {"market": {"slug": MARKET, "status": status}})
+    market = {"slug": MARKET, "status": "MARKET_STATUS_OPEN", "marketSides": [
+        {"long": False, "price": "1"}, {"long": True, "price": "0"},
+    ]}
+    monkeypatch.setattr(paper, "now", lambda: NOW + timedelta(minutes=5))
 
-    monkeypatch.setattr(paper, "public", market_result("MARKET_STATUS_OPEN"))
+    def market_result(method, url, *, params, **kwargs):
+        assert (method, url) == ("GET", f"{paper.GATEWAY}/v1/markets")
+        assert params == {"slug": [MARKET], "limit": 1}
+        return {"markets": [market]}
+
+    monkeypatch.setattr(paper, "read_json", market_result)
     paper.settle(path)
     assert paper.read_ledger(path)[0]["settlement"] is None
-    monkeypatch.setattr(paper, "public", market_result("MARKET_STATUS_RESOLVED"))
+    market["status"] = "MARKET_STATUS_RESOLVED"
     paper.settle(path)
     settled = paper.scan(path)
     assert settled["performance"]["wins"] == 1
@@ -183,3 +188,37 @@ def test_scan_persists_once_and_uses_exchange_settlement(monkeypatch, tmp_path):
     state = ScanState()
     state.wcbb = settled
     assert state.read()["wcbb_anytime"] == settled
+
+
+def test_settlement_batches_existing_entries_by_exact_market_slug(monkeypatch, tmp_path):
+    path = tmp_path / "wcbb.sqlite3"
+    picks = {"401": ("duke-unc", True), "402": ("fair-byu", False),
+             "403": ("stjohn-rich", True), "404": ("verm-gmsn", True)}
+    markets = []
+    for game_id, (teams, long) in picks.items():
+        event = f"wcbb-{teams}-2026-11-27"
+        slug = f"aec-{event}"
+        paper.record_entry(path, {"game_id": game_id, "event": event, "market": slug,
+                                  "long": long, "recorded_at": NOW.isoformat()})
+        markets.append({"slug": slug, "status": "MARKET_STATUS_RESOLVED", "marketSides": [
+            {"long": True, "price": "1"}, {"long": False, "price": "0"},
+        ]})
+    markets[2]["marketSides"][1]["price"] = "1"  # Complementary payouts are required.
+    markets[3]["slug"] = "aec-wcbb-verm-gmsn-2026-11-28"
+    requests = []
+
+    def market_result(method, url, *, params, **kwargs):
+        requests.append(params["slug"])
+        return {"markets": list(reversed(markets))}
+
+    monkeypatch.setattr(paper, "read_json", market_result)
+    paper.settle(path)
+    assert len(requests) == 1
+    assert len(requests[0]) == 4
+    entries = paper.read_ledger(path)
+    assert {row["game_id"]: row["settlement"] for row in entries} == {
+        "401": "1", "402": "0", "403": None, "404": None,
+    }
+    paper.settle(path)
+    assert requests[1] == [requests[0][2], requests[0][3]]
+    assert paper.read_ledger(path) == entries
