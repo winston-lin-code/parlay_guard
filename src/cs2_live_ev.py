@@ -15,7 +15,8 @@ from .cs2_ratings import analyzer_ratings, fragcharts_ratings, predict_ratings, 
 from .env_config import env_value
 from .inplay_scan import PROBABILITY_HAIRCUT, read_json, utc
 from .pro_live_ev import best_paper_quote
-from .us_wager import GATEWAY, SCANNER_BOOKS, SLUG, ONE, BookRateLimited, decimal, public
+from .us_wager import (EVENT_CACHE_MAX_AGE, GATEWAY, SCANNER_BOOKS, SLUG, ONE, BookRateLimited,
+                       decimal, public, retry_after_seconds)
 
 BOOK_AGE = 12
 SCORE_AGE = 120
@@ -24,6 +25,7 @@ PRICE_INTERVAL = 5
 RATING_INTERVAL = 30 * 60
 RATING_RETRY_INTERVAL = 2 * 60
 CITO_INTERVAL = 8
+CITO_IDLE_INTERVAL = 60
 REFERENCE_SIZE = Decimal("5")
 SLIPPAGE = Decimal(".01")
 CITO = "https://api.citoapi.com/api/v1/cs2/live"
@@ -158,24 +160,44 @@ def fixture(event, reference):
             "start": tip, "score_at": at, "rounds": venue_rounds(state, team_ids, map_number, score)}
 
 
-def live_events():
+def event_pages(filters):
     result = {}
     for offset in range(0, 600, 100):
-        page = read_json("GET", GATEWAY + "/v1/events", max_age=BOOK_AGE, params={
-            "active": "true", "closed": "false", "live": "true", "limit": 100, "offset": offset, "tagSlug": "cs2",
+        page = read_json("GET", GATEWAY + "/v1/events", max_age=EVENT_CACHE_MAX_AGE, params={
+            "active": "true", "closed": "false", "tagSlug": "cs2", "limit": 100, "offset": offset, **filters,
         })
         events = page["events"]
         if not isinstance(events, list):
             raise ValueError("Missing event listings")
         for event in events:
-            result[event.get("slug")] = event
+            if isinstance(event, dict) and isinstance(event.get("slug"), str):
+                result[event["slug"]] = event
         if len(events) < 100:
             return result.values()
     raise ValueError("Incomplete CS2 listing page")
 
 
+def live_events():
+    try:
+        return event_pages({"live": "true"})
+    except FEED_ERRORS as exc:
+        response = exc.response if isinstance(exc, requests.HTTPError) else None
+        if response is not None and response.status_code < 500:
+            raise
+    # A transient failure in the live listing can still leave dated listings reachable.
+    hour = now().replace(minute=0, second=0, microsecond=0)
+    return event_pages({"startDateMin": (hour - timedelta(hours=12)).isoformat(),
+                        "startDateMax": (hour + timedelta(hours=1)).isoformat()})
+
+
 def cito_list(key):
-    return read_json("GET", CITO, max_age=ROUND_AGE, headers={"x-api-key": key})["data"]
+    payload = read_json("GET", CITO, max_age=ROUND_AGE, headers={"x-api-key": key})
+    if not isinstance(payload, dict) or payload.get("success") is False or not isinstance(payload.get("data"), list):
+        raise ValueError("Cito did not return a live match list")
+    rows = payload["data"]
+    if any(not isinstance(row, dict) for row in rows):
+        raise ValueError("Cito returned an invalid live match list")
+    return rows
 
 
 def cito_match(match, live_rows):
@@ -331,8 +353,11 @@ class Reader:
         self.rating_checked = float("-inf")
         self.rating_interval = RATING_RETRY_INTERVAL
         self.pending_ratings = None
+        self.catalog_retry_at = float("-inf")
         self.cito_rows = []
         self.cito_checked = float("-inf")
+        self.cito_retry_at = float("-inf")
+        self.cito_status = "checking" if self.cito_key else "not_configured"
         self.cito_warning = None
 
     @staticmethod
@@ -343,13 +368,45 @@ class Reader:
                             ("CSGOPredict", predict_ratings)):
             try:
                 available.append(fetch(reference))
+            except cs2_ratings.RatingDateOutOfRange as exc:
+                warnings.append(f"{name}: published Elo date {exc.observed.date().isoformat()} is outside the usable range.")
             except FEED_ERRORS as exc:
                 warnings.append(f"{name}: {'dated ranking unavailable' if isinstance(exc, ValueError) else 'provider unavailable'}")
         return available, warnings
 
+    def refresh_cito(self, tick, *, has_matches):
+        interval = CITO_INTERVAL if has_matches else CITO_IDLE_INTERVAL
+        if not self.cito_key or tick - self.cito_checked < interval or tick < self.cito_retry_at:
+            return
+        self.cito_checked = tick
+        try:
+            self.cito_rows = cito_list(self.cito_key)
+        except FEED_ERRORS as exc:
+            self.cito_rows = []
+            self.cito_status = "unavailable"
+            self.cito_warning = "Cito round feed unavailable."
+            response = exc.response if isinstance(exc, requests.HTTPError) else None
+            if response is None:
+                return
+            code = response.status_code
+            if code == 429:
+                self.cito_status = "rate_limited"
+                self.cito_warning = "Cito rate-limited the round feed (HTTP 429)."
+                self.cito_retry_at = time.monotonic() + retry_after_seconds(response, default=60)
+            elif code in (401, 403):
+                self.cito_status = "access_denied"
+                self.cito_warning = ("Cito rejected authentication (HTTP 401)." if code == 401
+                                     else "Cito denied access to CS2 live data (HTTP 403).")
+                self.cito_retry_at = time.monotonic() + 300
+            else:
+                self.cito_warning = f"Cito round feed unavailable (HTTP {code})."
+        else:
+            self.cito_status = "ready" if self.cito_rows else "no_live_matches"
+            self.cito_warning = None
+
     def snapshot(self, pool):
         tick = time.monotonic()
-        events_future = pool.submit(live_events)
+        events_future = pool.submit(live_events) if tick >= self.catalog_retry_at else None
         if self.pending_ratings is not None and self.pending_ratings.done():
             updates, self.rating_warnings = self.pending_ratings.result()
             self.pending_ratings = None
@@ -365,27 +422,30 @@ class Reader:
             self.rating_checked = tick
             self.pending_ratings = pool.submit(self.fetch_ratings)
         self.ratings = cs2_ratings.current_ratings(self.ratings, now())
-        key = self.cito_key
-        if key and tick - self.cito_checked >= CITO_INTERVAL:
-            self.cito_checked = tick
+        warnings, matches = [], []
+        catalog_status = "rate_limited"
+        if events_future is not None:
             try:
-                self.cito_rows = cito_list(key)
-                self.cito_warning = None
-            except FEED_ERRORS:
-                self.cito_rows = []
-                self.cito_warning = "Cito round feed unavailable."
-        warnings = []
-        try:
-            reference = now()
-            matches = [m for event in events_future.result() if (m := fixture(event, reference))]
-        except FEED_ERRORS:
-            matches = []
+                reference = now()
+                matches = [m for event in events_future.result() if (m := fixture(event, reference))]
+                catalog_status = "ready"
+            except FEED_ERRORS as exc:
+                response = exc.response if isinstance(exc, requests.HTTPError) else None
+                if response is not None and response.status_code == 429:
+                    self.catalog_retry_at = time.monotonic() + retry_after_seconds(response)
+                else:
+                    catalog_status = "unavailable"
+        if catalog_status == "rate_limited":
+            warnings.append("Polymarket US rate-limited CS2 listings.")
+        elif catalog_status == "unavailable":
             warnings.append("Polymarket US CS2 listings unavailable.")
+        self.refresh_cito(time.monotonic(), has_matches=bool(matches))
         warnings.extend(self.rating_warnings)
         if self.cito_warning:
             warnings.append(self.cito_warning)
-        rows = list(pool.map(lambda match: evaluate(match, self.ratings, self.cito_rows, key), matches))
-        return {"updated_utc": now().isoformat(), "games": rows, "warnings": warnings, "round_feed": bool(key),
+        rows = list(pool.map(lambda match: evaluate(match, self.ratings, self.cito_rows, self.cito_key), matches))
+        return {"updated_utc": now().isoformat(), "games": rows, "warnings": warnings,
+                "catalog_status": catalog_status, "round_feed": bool(self.cito_key), "round_feed_status": self.cito_status,
                 "rating_sources": [{"name": source.name, "as_of": source.as_of.isoformat(),
                                     "origin": source.origin, "teams": len(source.teams)} for source in self.ratings]}
 

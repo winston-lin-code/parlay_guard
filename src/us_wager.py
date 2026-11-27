@@ -33,6 +33,20 @@ class BookRateLimited(WagerError):
         super().__init__("Polymarket US is temporarily rate-limiting order books.")
 
 
+def retry_after_seconds(response, default=10):
+    value = response.headers.get("Retry-After")
+    if value is None:
+        return default
+    try:
+        delay = int(value)
+    except (TypeError, ValueError):
+        try:
+            delay = (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds()
+        except (TypeError, ValueError, OverflowError):
+            return default
+    return max(1, ceil(delay))
+
+
 def decimal(value):
     try:
         number = Decimal(str(value))
@@ -93,17 +107,10 @@ class PublicBooks:
             response = error.response
             if response is None or response.status_code != 429:
                 raise
-            after = response.headers.get("Retry-After", "10")
-            try:
-                seconds = int(after)
-            except (TypeError, ValueError):
-                try:
-                    seconds = (parsedate_to_datetime(after) - datetime.now(timezone.utc)).total_seconds()
-                except (ValueError, TypeError, OverflowError):
-                    seconds = 10
+            seconds = retry_after_seconds(response)
             with self.lock:
                 now = time.monotonic()
-                self.retry_at = max(self.retry_at, now + max(1, seconds))
+                self.retry_at = max(self.retry_at, now + seconds)
                 raise BookRateLimited(self.retry_at - now) from error
 
     def read(self, slug, *, fetch, clock, max_age=BOOK_MAX_AGE):

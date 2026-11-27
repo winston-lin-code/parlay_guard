@@ -1,6 +1,9 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import requests
+
 from src import cs2_live_ev as cs2, cs2_ratings as elo
 from src import env_config
 
@@ -46,6 +49,89 @@ def book(age=1):
     return {"marketSlug": MARKET, "state": "MARKET_STATE_OPEN",
             "transactTime": (NOW - timedelta(seconds=age)).isoformat(),
             "bids": [level(".70")], "offers": [level(".73")]}
+
+
+def http_error(status, retry_after=None):
+    response = requests.Response()
+    response.status_code = status
+    if retry_after is not None:
+        response.headers["Retry-After"] = str(retry_after)
+    return requests.HTTPError("fixture HTTP error", response=response)
+
+
+def test_cs2_catalog_can_recover_from_a_failed_live_filter(monkeypatch):
+    monkeypatch.setattr(cs2, "now", lambda: NOW)
+    calls = []
+
+    def get(method, url, *, max_age, params):
+        assert (method, url) == ("GET", cs2.GATEWAY + "/v1/events")
+        assert max_age == cs2.EVENT_CACHE_MAX_AGE > cs2.BOOK_AGE
+        assert params["tagSlug"] == "cs2"
+        calls.append(params)
+        if "live" in params:
+            raise http_error(503)
+        return {"events": [event(), {**event(), "slug": "cs2-upcoming-2026-11-27", "live": False}]}
+
+    monkeypatch.setattr(cs2, "read_json", get)
+    matches = [match for raw in cs2.live_events() if (match := cs2.fixture(raw, NOW))]
+    assert [match["event"] for match in matches] == [SLUG]
+    assert len(calls) == 2 and "startDateMin" in calls[1] and "startDateMax" in calls[1]
+
+
+def test_cs2_catalog_reports_and_honors_rate_limit_without_retrying_another_filter(monkeypatch):
+    tick = 100.
+    calls = []
+
+    def get(method, url, *, max_age, params):
+        calls.append(params)
+        if len(calls) == 1:
+            raise http_error(429, 20)
+        return {"events": []}
+
+    monkeypatch.setattr(cs2, "read_json", get)
+    monkeypatch.setattr(cs2, "env_value", lambda _: None)
+    monkeypatch.setattr(cs2.time, "monotonic", lambda: tick)
+    reader = cs2.Reader()
+    reader.rating_checked = tick
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = reader.snapshot(pool)
+        tick += 15
+        still_limited = reader.snapshot(pool)
+        assert len(calls) == 1 and calls[0]["live"] == "true"
+        assert first["catalog_status"] == still_limited["catalog_status"] == "rate_limited"
+        assert first["warnings"] == ["Polymarket US rate-limited CS2 listings."]
+        tick += 5
+        recovered = reader.snapshot(pool)
+        assert recovered["catalog_status"] == "ready" and recovered["games"] == []
+        assert recovered["warnings"] == [] and len(calls) == 2
+
+
+@pytest.mark.parametrize(("code", "status", "cooldown"), [(401, "access_denied", 300), (403, "access_denied", 300),
+                                                       (429, "rate_limited", 37)])
+def test_cito_reports_auth_or_rate_limit_without_exposing_key(monkeypatch, code, status, cooldown):
+    tick = 100.
+    monkeypatch.setattr(cs2.time, "monotonic", lambda: tick)
+    monkeypatch.setattr(cs2, "env_value", lambda _: "fixture-secret")
+    calls = []
+
+    def live_list(key):
+        calls.append(key)
+        if len(calls) == 1:
+            raise http_error(code, 37)
+        return []
+
+    monkeypatch.setattr(cs2, "cito_list", live_list)
+    reader = cs2.Reader()
+    reader.refresh_cito(tick, has_matches=True)
+    assert reader.cito_status == status
+    assert str(code) in reader.cito_warning and "fixture-secret" not in reader.cito_warning
+    tick += cooldown - 1
+    reader.refresh_cito(tick, has_matches=True)
+    assert len(calls) == 1
+    tick += 1
+    reader.refresh_cito(tick, has_matches=True)
+    assert reader.cito_status == "no_live_matches" and reader.cito_warning is None
+    assert len(calls) == 2
 
 
 def test_series_and_mr12_progression():

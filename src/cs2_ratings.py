@@ -35,6 +35,12 @@ TEAM_ALIASES = {
 }
 
 
+class RatingDateOutOfRange(ValueError):
+    def __init__(self, source, observed):
+        self.observed = observed
+        super().__init__(f"{source} ranking is outdated or future-dated")
+
+
 def team_key(name):
     name = unicodedata.normalize("NFKD", str(name or "")).encode("ascii", "ignore").decode().lower()
     key = re.sub(r"[^a-z0-9]", "", name)
@@ -180,7 +186,7 @@ def fragcharts_ratings(reference):
         raise ValueError("Fragcharts returned an unknown rating month")
     observed = datetime(int(year), months.index(month.title()) + 1, int(day), tzinfo=timezone.utc)
     if not timedelta(0) <= reference - observed <= MAX_RATING_AGE:
-        raise ValueError("Fragcharts ranking is outdated")
+        raise RatingDateOutOfRange("Fragcharts", observed)
     ratings, ambiguous = {}, set()
     for i, value in enumerate(words[1:-2], 1):
         if not re.fullmatch(r"(?:[1-3],\d{3}|[5-9]\d{2})", value):
@@ -224,7 +230,7 @@ def analyzer_ratings(reference):
         if not re.search(r"\bNext\b", words):
             break
     if observed > reference or reference - observed > MAX_RATING_AGE:
-        raise ValueError("CS ELO Analyzer ranking is outdated")
+        raise RatingDateOutOfRange("CS ELO Analyzer", observed)
     return Ratings("CS ELO Analyzer", observed, {key: value for key, value in ratings.items() if key not in ambiguous})
 
 
@@ -235,5 +241,5 @@ def predict_ratings(reference):
         raise ValueError("CSGOPredict did not return a dated ranking")
     observed = datetime.fromisoformat(" ".join(updated[1].split())).replace(tzinfo=timezone.utc)
     if not timedelta(0) <= reference - observed <= MAX_RATING_AGE:
-        raise ValueError("CSGOPredict ranking is outdated")
+        raise RatingDateOutOfRange("CSGOPredict", observed)
     return Ratings("CSGOPredict", observed, ratings)

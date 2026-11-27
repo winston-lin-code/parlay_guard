@@ -870,12 +870,20 @@ function renderCs2(now, query) {
     source.name, ratingDate.format(new Date(source.as_of)), source.teams + ' teams',
     {cache:'Saved snapshot', bundled:'Bundled snapshot'}[source.origin],
   ].filter(Boolean).join(' · '));
+  const roundFeed = {
+    checking: 'Checking Cito round feed', ready: 'Cito reachable',
+    no_live_matches: 'Cito reports no live matches', access_denied: 'Cito access denied',
+    rate_limited: 'Cito round feed rate-limited', unavailable: 'Cito round feed unavailable',
+  }[scan?.round_feed_status] || 'Polymarket series score';
   text('cs2-sources', [sources.length ? sources.join(' / ')
-    : (scan?.warnings?.some(warning => /provider|ranking/.test(warning))
+    : (scan?.warnings?.some(warning => /provider|ranking|published Elo date/.test(warning))
       ? 'Dated team Elo unavailable' : 'Fetching dated team Elo'),
-    scan?.round_feed ? 'Cito round feed configured' : 'Polymarket series score'].join(' · '));
+    roundFeed].join(' · '));
+  const empty = scan?.catalog_status === 'ready' && !games.length
+    ? (scan.games.length ? 'No live CS2 moneylines match your search.' : 'No verified live CS2 moneylines on Polymarket US.')
+    : '';
   const notices = [offline ? 'Connection interrupted' : !current ? 'Waiting for the CS2 reader'
-    : !games.length ? 'No live CS2 moneylines match this view.' : '', ...(scan?.warnings || [])].filter(Boolean);
+    : empty, ...(scan?.warnings || [])].filter(Boolean);
   text('cs2-status', notices.join(' '));
   $('cs2-status').hidden = notices.length === 0;
   const fingerprint = JSON.stringify(games);
@@ -889,6 +897,7 @@ function renderCs2(now, query) {
     info.append(element('h3', game.title), element('p', [
       game.period, game.maps ? 'Maps ' + game.maps.join('–') : '',
       game.rounds ? 'Rounds ' + game.rounds.join('–') : '',
+      game.rounds_unavailable ? 'Cito scoreboard unavailable' : '',
       game.formats?.length ? game.formats.map(value => 'BO' + value).join('/') : '',
       game.rating_source, cs2Status[game.status],
     ].filter(Boolean).join(' · '), 'muted'));
