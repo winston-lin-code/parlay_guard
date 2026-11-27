@@ -15,7 +15,7 @@ from .cs2_ratings import analyzer_ratings, fragcharts_ratings, predict_ratings, 
 from .env_config import env_value
 from .inplay_scan import PROBABILITY_HAIRCUT, read_json, utc
 from .pro_live_ev import best_paper_quote
-from .us_wager import GATEWAY, SLUG, ONE, decimal, public
+from .us_wager import GATEWAY, SCANNER_BOOKS, SLUG, ONE, BookRateLimited, decimal, public
 
 BOOK_AGE = 12
 SCORE_AGE = 120
@@ -248,14 +248,7 @@ def reference_quote(book, match, side, probability, reference):
 
 
 def market_book(slug):
-    path = f"/v1/markets/{slug}/book"
-    try:
-        book = public(path)["marketData"]
-        if book.get("state") != "MARKET_STATE_OPEN" or fresh(utc(book.get("transactTime")), now(), BOOK_AGE):
-            return book
-    except FEED_ERRORS:
-        pass
-    return public(path, fresh_book=True)["marketData"]
+    return SCANNER_BOOKS.read(slug, fetch=public, clock=now, max_age=BOOK_AGE)
 
 
 def evaluate(match, ratings, cito_rows, key):
@@ -319,6 +312,8 @@ def evaluate(match, ratings, cito_rows, key):
             row["sides"][i].update(quote)
         if outcome and any("ev_low" in side for side in row["sides"]):
             row["status"] = "priced"
+    except BookRateLimited as exc:
+        row.update(status="book_rate_limited", retry_after_seconds=exc.retry_after)
     except FEED_ERRORS:
         if outcome:
             row["status"] = "book_unavailable"

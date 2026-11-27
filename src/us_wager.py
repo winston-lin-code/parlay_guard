@@ -1,8 +1,13 @@
 """Match a scanner selection to a Polymarket US contract and price a limit order."""
 
 import re
+import time
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
+from email.utils import parsedate_to_datetime
+from math import ceil
 from secrets import token_hex
+from threading import Lock
 from urllib.parse import urlencode
 
 import requests
@@ -20,6 +25,12 @@ EVENT_CACHE_MAX_AGE = 30
 
 class WagerError(ValueError):
     pass
+
+
+class BookRateLimited(WagerError):
+    def __init__(self, retry_after):
+        self.retry_after = max(1, ceil(retry_after))
+        super().__init__("Polymarket US is temporarily rate-limiting order books.")
 
 
 def decimal(value):
@@ -48,6 +59,69 @@ def public(path, *, fresh_book=False, fresh_score=False):
             raise WagerError("Polymarket US returned cached game state.")
         raise WagerError("The Polymarket US listing is out of date. Get a new US quote.")
     return response.json()
+
+
+class PublicBooks:
+    """Pace scanner reads and share the venue's retry window across workers."""
+
+    def __init__(self, interval=0.5):
+        self.interval = interval
+        self.lock = Lock()
+        self.next_request = 0.
+        self.retry_at = 0.
+
+    def request(self, path, fetch, *, fresh_book=False):
+        with self.lock:
+            now = time.monotonic()
+            if now < self.retry_at:
+                raise BookRateLimited(self.retry_at - now)
+            start = max(now, self.next_request)
+            self.next_request = start + self.interval
+        if start > now:
+            time.sleep(start - now)
+        with self.lock:
+            remaining = self.retry_at - time.monotonic()
+            if remaining > 0:
+                raise BookRateLimited(remaining)
+        try:
+            payload = fetch(path, fresh_book=True) if fresh_book else fetch(path)
+            book = payload.get("marketData") if isinstance(payload, dict) else None
+            if not isinstance(book, dict):
+                raise WagerError("Polymarket US returned no order-book data.")
+            return book
+        except requests.HTTPError as error:
+            response = error.response
+            if response is None or response.status_code != 429:
+                raise
+            after = response.headers.get("Retry-After", "10")
+            try:
+                seconds = int(after)
+            except (TypeError, ValueError):
+                try:
+                    seconds = (parsedate_to_datetime(after) - datetime.now(timezone.utc)).total_seconds()
+                except (ValueError, TypeError, OverflowError):
+                    seconds = 10
+            with self.lock:
+                now = time.monotonic()
+                self.retry_at = max(self.retry_at, now + max(1, seconds))
+                raise BookRateLimited(self.retry_at - now) from error
+
+    def read(self, slug, *, fetch, clock, max_age=BOOK_MAX_AGE):
+        path = f"/v1/markets/{slug}/book"
+        try:
+            book = self.request(path, fetch)
+        except BookRateLimited:
+            raise
+        except (ValueError, OSError, KeyError, TypeError):
+            return self.request(path, fetch, fresh_book=True)
+        observed = utc(book.get("transactTime"))
+        if (book.get("marketSlug") == slug and (book.get("state") != "MARKET_STATE_OPEN"
+                or observed and 0 <= (clock() - observed).total_seconds() <= max_age)):
+            return book
+        return self.request(path, fetch, fresh_book=True)
+
+
+SCANNER_BOOKS = PublicBooks()
 
 
 def name(value):

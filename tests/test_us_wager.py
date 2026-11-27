@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import requests
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -43,6 +44,53 @@ def test_matches_exact_line_and_buy_short_uses_complement_price():
     with pytest.raises(WagerError):
         match_contract(PICK, {**US_EVENT, "markets": [
             {**CONTRACT, "sportsMarketType": "basketball_team_first_half_total"}]}, START)
+
+
+def test_public_books_refresh_only_an_old_book():
+    from src.us_wager import PublicBooks
+
+    book = {"marketSlug": MARKET, "state": "MARKET_STATE_OPEN", "transactTime": START.isoformat()}
+    calls = []
+
+    def fetch(path, *, fresh_book=False):
+        calls.append(fresh_book)
+        return {"marketData": book}
+
+    scanner = PublicBooks(interval=0)
+    assert scanner.read(MARKET, fetch=fetch, clock=lambda: START) == book
+    assert calls == [False]
+    scanner.read(MARKET, fetch=fetch, clock=lambda: START + timedelta(seconds=20))
+    assert calls == [False, False, True]
+
+
+def test_public_books_honor_retry_after_across_market_requests(monkeypatch):
+    from src import us_wager
+
+    moment = [100.]
+    monkeypatch.setattr(us_wager.time, "monotonic", lambda: moment[0])
+    scanner = us_wager.PublicBooks(interval=0)
+    response = requests.Response()
+    response.status_code = 429
+    response.headers["Retry-After"] = "10"
+    calls = []
+
+    def fetch(path, **options):
+        calls.append(path)
+        if len(calls) == 1:
+            response.raise_for_status()
+        return {"marketData": {"marketSlug": "another-market", "state": "MARKET_STATE_OPEN",
+                               "transactTime": START.isoformat()}}
+
+    with pytest.raises(us_wager.BookRateLimited) as first:
+        scanner.read(MARKET, fetch=fetch, clock=lambda: START)
+    assert first.value.retry_after == 10
+    moment[0] += 4
+    with pytest.raises(us_wager.BookRateLimited) as second:
+        scanner.read("another-market", fetch=fetch, clock=lambda: START)
+    assert second.value.retry_after == 6 and len(calls) == 1
+    moment[0] += 6
+    assert scanner.read("another-market", fetch=fetch, clock=lambda: START)["marketSlug"] == "another-market"
+    assert len(calls) == 2
 
 
 def test_preview_and_confirm_is_opt_in_and_single_use(tmp_path, monkeypatch):

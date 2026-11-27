@@ -12,7 +12,7 @@ import sqlite3
 from . import halftime_paper
 from .inplay_scan import PROBABILITY_HAIRCUT, read_json, utc
 from .pro_live_ev import best_paper_quote
-from .us_wager import BOOK_MAX_AGE, ONE, SLUG, decimal, public
+from .us_wager import BOOK_MAX_AGE, ONE, SCANNER_BOOKS, SLUG, BookRateLimited, decimal, public
 
 DB_PATH = Path("data/paper_trades/wcbb_anytime.sqlite3")
 LEAGUE = "WCBB"
@@ -123,13 +123,21 @@ def scan_game(game, listings, previous):
     except halftime_paper.FEED_ERRORS:
         return {**row, "status": "espn_probability_unavailable"}, None
     try:
-        book = public(f"/v1/markets/{contract['slug']}/book", fresh_book=True)["marketData"]
+        book = SCANNER_BOOKS.read(contract["slug"], fetch=public, clock=now)
+    except BookRateLimited as exc:
+        return {**row, "status": "book_rate_limited", "retry_after_seconds": exc.retry_after}, None
     except halftime_paper.FEED_ERRORS:
         return {**row, "status": "book_unavailable"}, None
     try:
         quoted = utc(book.get("transactTime"))
-        if (quoted is None or quoted < game["tip"] or not 0 <= (now() - quoted).total_seconds() <= BOOK_MAX_AGE
-                or book.get("marketSlug") != contract["slug"] or book.get("state") != "MARKET_STATE_OPEN"):
+        checked = now()
+        if book.get("marketSlug") != contract["slug"]:
+            return {**row, "status": "book_unavailable"}, None
+        if book.get("state") != "MARKET_STATE_OPEN":
+            return {**row, "status": "book_not_open"}, None
+        if quoted is not None and (age := (checked - quoted).total_seconds()) > BOOK_MAX_AGE:
+            return {**row, "status": "book_stale", "book_age_seconds": int(age)}, None
+        if quoted is None or quoted < game["tip"] or quoted > checked:
             return {**row, "status": "no_fresh_book"}, None
         estimate = forecast(summary, game, quoted)
         if not estimate:
@@ -251,7 +259,7 @@ def scoreboards(days):
     return events
 
 
-def scan(path):
+def scan(path, *, start_index=0):
     started = now().astimezone(halftime_paper.ET)
     day = started.date()
     days = (day - timedelta(days=1), day) if started.hour < 6 else (day,)
@@ -276,7 +284,13 @@ def scan(path):
             warnings.append("Polymarket US listings unavailable.")
         else:
             market_list = listings.get(LEAGUE, [])
-        results = list(pool.map(lambda game: scan_game(game, market_list, previous), games.values()))
+        ids = list(games)
+        offset = start_index % len(ids) if ids else 0
+        order = ids[offset:] + ids[:offset]
+        # A busy venue can exhaust the first part of a scan. Rotate the
+        # request order between passes while preserving the dashboard order.
+        completed = dict(zip(order, pool.map(lambda key: scan_game(games[key], market_list, previous), order)))
+        results = [completed[key] for key in ids]
     candidates = [entry for _, entry in results if entry]
     verified = {}
     if candidates:

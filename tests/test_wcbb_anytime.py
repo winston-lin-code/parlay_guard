@@ -105,6 +105,24 @@ def test_verified_market_link_survives_feed_failure(monkeypatch, failure, expect
     assert paper.scan_game(game, None, {})[0]["status"] == "market_catalog_unavailable"
 
 
+def test_wcbb_distinguishes_rate_limits_and_stale_books(monkeypatch):
+    contract, summary, book = inputs(1, .73, ".50")
+    monkeypatch.setattr(paper, "now", lambda: NOW)
+    monkeypatch.setattr(paper, "read_json", lambda *args, **kwargs: summary)
+    game = paper.game_state(fixture())
+
+    def limited(*args, **kwargs):
+        raise paper.BookRateLimited(10)
+
+    monkeypatch.setattr(paper.SCANNER_BOOKS, "read", limited)
+    row, entry = paper.scan_game(game, [(EVENT, contract)], {})
+    assert (row["status"], row["retry_after_seconds"], entry) == ("book_rate_limited", 10, None)
+    book["transactTime"] = (NOW - timedelta(seconds=64)).isoformat()
+    monkeypatch.setattr(paper.SCANNER_BOOKS, "read", lambda *args, **kwargs: book)
+    row, entry = paper.scan_game(game, [(EVENT, contract)], {})
+    assert (row["status"], row["book_age_seconds"], entry) == ("book_stale", 64, None)
+
+
 def test_discovers_open_moneyline_before_exchange_marks_game_live(monkeypatch):
     contract, _, _ = inputs(1, .73, ".50")
     delayed = {"slug": EVENT, "live": False, "ended": False, "markets": [contract]}

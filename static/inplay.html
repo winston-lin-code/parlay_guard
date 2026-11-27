@@ -719,6 +719,9 @@ const wcbbStatus = {
   paper_entry_logged: 'Paper entry logged',
   espn_probability_unavailable: 'US moneyline found · ESPN win probability feed unavailable',
   book_unavailable: 'US moneyline found · Order book unavailable',
+  book_rate_limited: 'Polymarket US rate-limited the order-book request',
+  book_not_open: 'US order book is paused or closed',
+  book_stale: 'Latest US order book is too old to price',
   no_fresh_book: 'Waiting for a fresh US ask',
   waiting_for_probability: 'Waiting for a matching ESPN win probability',
   below_probability: 'Win probability at or below 60%',
@@ -782,7 +785,10 @@ function renderWcbb(now, query) {
     const row = element('li', '');
     const info = element('div', '');
     info.append(element('p', game.title, 'selection'),
-      element('p', [game.score, game.checkpoint, game.clock, wcbbStatus[game.status]].filter(Boolean).join(' · '), 'muted'));
+      element('p', [game.score, game.checkpoint, game.clock, wcbbStatus[game.status],
+        game.retry_after_seconds ? 'Retry window ' + game.retry_after_seconds + 's' : '',
+        game.book_age_seconds ? 'Book age ' + game.book_age_seconds + 's' : '',
+      ].filter(Boolean).join(' · '), 'muted'));
     addWcbbMarketLink(info, game.market_url);
     const numbers = element('div', '', 'numbers');
     if (game.side) numbers.append(element('p', game.side));
@@ -813,6 +819,7 @@ const cs2Status = {
   rating_missing: 'No current Elo source covers both teams',
   waiting_for_book: 'Waiting for a fresh book at the verified score',
   book_unavailable: 'Order book unavailable',
+  book_rate_limited: 'Polymarket US rate-limited the order-book request',
 };
 
 function renderCs2(now, query) {

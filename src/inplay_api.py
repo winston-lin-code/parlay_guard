@@ -185,10 +185,12 @@ class ScanState:
 
     def wcbb_loop(self):
         ledger = ROOT / wcbb_anytime.DB_PATH
+        start_index = 0
         while not self.stop.is_set():
             started = time.monotonic()
             try:
-                value = wcbb_anytime.scan(ledger)
+                value = wcbb_anytime.scan(ledger, start_index=start_index)
+                start_index += 1
             except Exception as exc:
                 with self.lock:
                     value = {**self.wcbb, "status": "feed_unavailable", "updated_utc": None, "games": [],
