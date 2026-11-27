@@ -105,6 +105,7 @@ class ScanState:
         self.wcbb = {"status": "waiting", "updated_utc": None, "games": [], "entries": [],
                      "performance": wcbb_anytime.performance([]), "orders": [], "warnings": []}
         self.wcbb_orders = None
+        self.wcbb_books = None
         self.wcbb_order_read_error = None
         self.wcbb_settlement_error = None
         self.cs2 = {"updated_utc": None, "games": [], "warnings": [], "rating_sources": [], "round_feed": False}
@@ -120,6 +121,8 @@ class ScanState:
                  (self.league_live_loop, "cfb", scan_college_live, "cfb"))
         if self.wcbb_orders is not None:
             tasks += ((self.wcbb_order_loop,),)
+        if self.wcbb_books is not None:
+            tasks += ((self.wcbb_books.follow, self.stop),)
         for target, *args in tasks:
             worker = threading.Thread(target=target, args=args, daemon=True)
             worker.start()
@@ -193,7 +196,8 @@ class ScanState:
         while not self.stop.is_set():
             started = time.monotonic()
             try:
-                value = wcbb_anytime.scan(ledger, start_index=start_index, live_orders=self.wcbb_orders)
+                value = wcbb_anytime.scan(ledger, start_index=start_index, live_orders=self.wcbb_orders,
+                                          book_stream=self.wcbb_books)
                 start_index += 1
             except Exception as exc:
                 with self.lock:

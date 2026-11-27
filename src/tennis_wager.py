@@ -84,9 +84,10 @@ class Scores:
 
 
 class BookStream:
-    def __init__(self, credentials, wake):
+    def __init__(self, credentials, wake, *, request_id="itf-score-paper"):
         self.credentials = credentials
         self.wake = wake
+        self.request_id = request_id
         self.lock = Lock()
         self.markets = frozenset()
         self.snapshots = {}
@@ -129,7 +130,7 @@ class BookStream:
             if not markets:
                 stop.wait(0.25)
                 continue
-            subscription = {"subscribe": {"requestId": "itf-score-paper", "marketSlugs": sorted(markets),
+            subscription = {"subscribe": {"requestId": self.request_id, "marketSlugs": sorted(markets),
                                           "subscriptionType": "SUBSCRIPTION_TYPE_MARKET_DATA"}}
             try:
                 with connect(MARKETS_WS, additional_headers=auth_headers(self.credentials),
@@ -162,6 +163,18 @@ class BookStream:
                 self.wake.set()
             if markets == self.markets:
                 stop.wait(2)
+
+    def latest(self, market, *, clock, max_age, after=None):
+        with self.lock:
+            snapshot = self.snapshots.get(market)
+        if snapshot is None:
+            return None
+        book, _ = snapshot
+        observed = utc(book.get("transactTime"))
+        if (observed is not None and 0 <= (clock() - observed).total_seconds() <= max_age
+                and (after is None or observed > after)):
+            return book
+        return None
 
     def usable_after(self, market, score, *, diagnostic=None):
         with self.lock:

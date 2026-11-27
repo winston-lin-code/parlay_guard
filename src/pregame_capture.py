@@ -107,7 +107,12 @@ def get_credentials(prompt_key, env_file=None):
         secret = secret or getpass.getpass('Polymarket US secret key: ').strip()
     if not (key_id and secret):
         raise ValueError(f'Set {KEY_ID_VAR} and {SECRET_VAR}, use --env-file or --prompt-key, or choose --mode poll')
+    return signing_credentials(key_id, secret)
+
+
+def signing_credentials(key_id, secret):
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
     seed = base64.b64decode(secret, validate=True)
     if len(seed) not in (32, 64):
         raise ValueError('Polymarket US secret key must decode to 32 or 64 bytes')

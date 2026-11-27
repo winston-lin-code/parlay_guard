@@ -8,6 +8,7 @@ from decimal import Decimal
 import json
 from pathlib import Path
 import sqlite3
+from threading import Semaphore
 
 from . import halftime_paper
 from .inplay_scan import PROBABILITY_HAIRCUT, read_json, utc
@@ -25,6 +26,7 @@ MIN_EV = Decimal(".05")
 SLIPPAGE = Decimal(".01")
 SCORE_DELAY = 15
 SETTLEMENT_BATCH_SIZE = 50
+REST_BOOKS_PER_STREAM_SCAN = 4
 SUMMARY_URL = ("https://site.api.espn.com/apis/site/v2/sports/basketball/"
                "womens-college-basketball/summary")
 
@@ -101,7 +103,7 @@ def moneyline_url(event, market):
     return None
 
 
-def scan_game(game, listings, previous, *, live_orders=None):
+def scan_game(game, listings, previous, *, live_orders=None, book_stream=None, rest_budget=None):
     away, home = (game["teams"][key] for key in ("away", "home"))
     row = {"game_id": game["id"], "title": f"{display_team(away)} vs {display_team(home)}",
            "score": f"{away['abbreviation']} {game['scores']['away']} · {home['abbreviation']} {game['scores']['home']}",
@@ -124,21 +126,31 @@ def scan_game(game, listings, previous, *, live_orders=None):
     if not listing:
         return row, None
     event, contract, assignments = listing
-    row["market_url"] = moneyline_url(event["slug"], contract["slug"])
+    slug = contract["slug"]
+    row["market_url"] = moneyline_url(event["slug"], slug)
+    previous_at = None
     if retry:
         row["refreshing_order"] = True
-        if contract["slug"] != entry["market_slug"]:
+        if slug != entry["market_slug"]:
             return {**row, "status": "live_order_already_attempted"}, None
+        previous_at = utc(entry["recorded_at"])
     try:
         summary = read_json("GET", SUMMARY_URL, max_age=15, params={"event": game["id"]},
                             headers={"Cache-Control": "no-cache"})
     except halftime_paper.FEED_ERRORS:
         return {**row, "status": "espn_probability_unavailable"}, None
     try:
-        if retry:
-            book = SCANNER_BOOKS.request(f"/v1/markets/{contract['slug']}/book", public, fresh_book=True)
+        book = book_stream.latest(slug, clock=now, max_age=BOOK_MAX_AGE, after=previous_at) if book_stream else None
+        if book is not None:
+            row["book_source"] = "websocket"
         else:
-            book = SCANNER_BOOKS.read(contract["slug"], fetch=public, clock=now)
+            if rest_budget is not None and not rest_budget.acquire(blocking=False):
+                return {**row, "status": "waiting_for_stream_book"}, None
+            if retry or book_stream is not None:
+                book = SCANNER_BOOKS.request(f"/v1/markets/{slug}/book", public, fresh_book=True)
+            else:
+                book = SCANNER_BOOKS.read(slug, fetch=public, clock=now)
+            row["book_source"] = "rest"
     except BookRateLimited as exc:
         return {**row, "status": "book_rate_limited", "retry_after_seconds": exc.retry_after}, None
     except halftime_paper.FEED_ERRORS:
@@ -146,7 +158,7 @@ def scan_game(game, listings, previous, *, live_orders=None):
     try:
         quoted = utc(book.get("transactTime"))
         checked = now()
-        if book.get("marketSlug") != contract["slug"]:
+        if book.get("marketSlug") != slug:
             return {**row, "status": "book_unavailable"}, None
         if book.get("state") != "MARKET_STATE_OPEN":
             return {**row, "status": "book_not_open"}, None
@@ -154,7 +166,7 @@ def scan_game(game, listings, previous, *, live_orders=None):
             return {**row, "status": "book_stale", "book_age_seconds": int(age)}, None
         if quoted is None or quoted < game["tip"] or quoted > checked:
             return {**row, "status": "no_fresh_book"}, None
-        if retry and ((previous_at := utc(entry["recorded_at"])) is None or quoted <= previous_at):
+        if retry and (previous_at is None or quoted <= previous_at):
             return {**row, "status": "waiting_for_retry_quote"}, None
         estimate = forecast(summary, game, quoted)
         if not estimate:
@@ -295,7 +307,7 @@ def scoreboards(days):
     return events
 
 
-def scan(path, *, start_index=0, live_orders=None):
+def scan(path, *, start_index=0, live_orders=None, book_stream=None):
     started = now().astimezone(halftime_paper.ET)
     day = started.date()
     days = (day - timedelta(days=1), day) if started.hour < 6 else (day,)
@@ -306,6 +318,8 @@ def scan(path, *, start_index=0, live_orders=None):
     warnings = []
     ledger = read_ledger(path)
     live = live_orders is not None
+    # Each permit authorizes one REST fallback for this scan across all its workers.
+    rest_budget = Semaphore(REST_BOOKS_PER_STREAM_SCAN) if book_stream is not None else None
     with ThreadPoolExecutor(max_workers=8) as pool:
         inventory = pool.submit(halftime_paper.live_inventory, LEAGUE, start_window=start_window)
         try:
@@ -322,12 +336,23 @@ def scan(path, *, start_index=0, live_orders=None):
             market_list = listings.get(LEAGUE, [])
         ids = list(games)
         previous = live_orders.attempts(LEAGUE, ids) if live else {row["game_id"]: row for row in ledger}
+        if book_stream is not None and market_list is not None:
+            subscriptions = {match[1]["slug"] for key, game in games.items()
+                             if (key not in previous or (live and live_orders.can_retry(previous[key])))
+                             and (match := halftime_paper.contract_and_sides({**game, "listed_moneylines": market_list}))}
+            horizon = started + timedelta(minutes=5)
+            subscriptions.update(contract["slug"] for slug, contract in market_list
+                                 if moneyline_url(slug, contract.get("slug")) and contract.get("active") is True
+                                 and contract.get("closed") is False and contract.get("marketType") == "moneyline"
+                                 and (tip := utc(contract.get("gameStartTime"))) and started <= tip <= horizon)
+            book_stream.set_markets(subscriptions)
         offset = start_index % len(ids) if ids else 0
         order = ids[offset:] + ids[:offset]
         # A busy venue can exhaust the first part of a scan. Rotate the
         # request order between passes while preserving the dashboard order.
         completed = dict(zip(order, pool.map(
-            lambda key: scan_game(games[key], market_list, previous, live_orders=live_orders), order)))
+            lambda key: scan_game(games[key], market_list, previous, live_orders=live_orders, book_stream=book_stream,
+                                  rest_budget=rest_budget), order)))
         results = [completed[key] for key in ids]
     candidates = [entry for _, entry in results if entry]
     verified = {}
@@ -367,6 +392,8 @@ def scan(path, *, start_index=0, live_orders=None):
     else:
         ledger = read_ledger(path) if candidates else ledger
         orders = []
+    if book_stream is not None and book_stream.error:
+        warnings.append(f"{book_stream.error} The scanner is using limited REST fallback.")
     return {"status": "feed_unavailable" if warnings else "ready", "updated_utc": now().isoformat(),
             "games": [row for row, _ in results], "performance": performance(ledger),
             "entries": [{**entry, "market_url": moneyline_url(entry.get("event"), entry.get("market"))}

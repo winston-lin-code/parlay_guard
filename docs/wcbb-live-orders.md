@@ -12,6 +12,11 @@ The strategy looks for its first qualifying in-game moneyline with win
 probability above 60%, screened EV of at least 5%, and a best ask of at least
 20¢. It uses a fill-or-kill limit order with a $5 all-in cap per game.
 
+Live mode subscribes to full Polymarket US order books over one WebSocket.
+It includes matched live games and listed moneylines starting within five
+minutes. If a stream snapshot is missing or stale, the scanner can use up to
+four paced REST book requests per scan and honors the exchange cooldown.
+
 If Polymarket confirms the first order expired with zero fills, the runner
 refreshes the score and order book and allows one retry that passes the same
 screen. A request with unknown status stays reserved while Polymarket status

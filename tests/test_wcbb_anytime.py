@@ -3,13 +3,14 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 import sys
-from threading import Barrier
+from threading import Barrier, Event
 from types import SimpleNamespace
 
 import pytest
 
 from src import env_config, pro_halftime_orders, run_research, wcbb_anytime as paper
 from src.inplay_api import ScanState
+from src.tennis_wager import BookStream
 
 NOW = datetime(2026, 11, 27, 18, tzinfo=timezone.utc)
 EVENT = "wcbb-duke-unc-2026-11-27"
@@ -127,6 +128,54 @@ def test_wcbb_distinguishes_rate_limits_and_stale_books(monkeypatch):
     monkeypatch.setattr(paper.SCANNER_BOOKS, "read", lambda *args, **kwargs: book)
     row, entry = paper.scan_game(game, [(EVENT, contract)], {})
     assert (row["status"], row["book_age_seconds"], entry) == ("book_stale", 64, None)
+
+
+def test_wcbb_prices_verified_stream_book_without_rest(monkeypatch):
+    contract, summary, book = inputs(1, .73, ".50")
+    stream = BookStream(None, Event(), request_id="wcbb-anytime")
+    stream.set_markets([MARKET])
+    stream.publish(stream.markets, {**book, "offers": []})
+    monkeypatch.setattr(paper, "now", lambda: NOW)
+    monkeypatch.setattr(paper, "read_json", lambda *args, **kwargs: summary)
+
+    def limited(*args, **kwargs):
+        pytest.fail("A fresh streamed quote should require no REST book request")
+
+    monkeypatch.setattr(paper.SCANNER_BOOKS, "request", limited)
+    row, entry = paper.scan_game(paper.game_state(fixture()), [(EVENT, contract)], {}, book_stream=stream)
+    assert row["status"] == "pending_recheck" and row["book_source"] == "websocket"
+    assert entry["market"] == MARKET and entry["screened_ev"] >= .05
+
+
+def test_wcbb_subscribes_pregame_and_caps_rest_fallback_across_workers(monkeypatch, tmp_path):
+    contract, summary, _ = inputs(1, .73, ".50")
+    upcoming = "wcbb-lsu-vill-2026-11-27"
+    upcoming_contract = {**contract, "slug": "aec-" + upcoming,
+                         "gameStartTime": (NOW + timedelta(minutes=3)).isoformat(),
+                         "marketSides": [{"long": True, "team": {"name": "LSU (W)"}},
+                                         {"long": False, "team": {"name": "Villanova (W)"}}]}
+    stream = BookStream(None, Event(), request_id="wcbb-anytime")
+    monkeypatch.setattr(paper, "now", lambda: NOW)
+    monkeypatch.setattr(paper.halftime_paper, "live_inventory", lambda *args, **kwargs: (
+        {"WCBB": [(EVENT, contract), (upcoming, upcoming_contract)]}, []))
+    monkeypatch.setattr(paper.halftime_paper, "scores", lambda *args: [
+        {**fixture(), "id": str(game_id)} for game_id in range(101, 108)])
+    monkeypatch.setattr(paper, "read_json", lambda *args, **kwargs: summary)
+    requests = []
+
+    def limited(path, fetch, *, fresh_book):
+        assert fresh_book is True
+        requests.append(path)
+        raise paper.BookRateLimited(10)
+
+    monkeypatch.setattr(paper.SCANNER_BOOKS, "request", limited)
+    result = paper.scan(tmp_path / "paper.sqlite3", book_stream=stream)
+    assert stream.markets == {MARKET, "aec-" + upcoming}
+    assert len(requests) == paper.REST_BOOKS_PER_STREAM_SCAN
+    statuses = [row["status"] for row in result["games"]]
+    assert statuses.count("book_rate_limited") == 4
+    assert statuses.count("waiting_for_stream_book") == 3
+    assert not result["entries"]
 
 
 def test_discovers_open_moneyline_before_exchange_marks_game_live(monkeypatch):
@@ -423,6 +472,7 @@ def test_dashboard_runner_enables_only_wcbb_live_after_auth_check(monkeypatch, t
         assert started == [app]
         assert scanner.wcbb_orders.path == tmp_path / paper.LIVE_DB_PATH
         assert scanner.wcbb_orders.retry_expired is True
+        assert scanner.wcbb_books.request_id == "wcbb-anytime"
         assert scanner.read()["wcbb_anytime"]["live_ordering"]
     else:
         with pytest.raises(SystemExit) as error:

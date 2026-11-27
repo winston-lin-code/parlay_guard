@@ -740,6 +740,7 @@ const wcbbStatus = {
   live_order_unknown: 'Order state unknown',
   live_order_retry_unconfirmed: 'Waiting for Polymarket to confirm the prior expiry and zero fills',
   waiting_for_retry_quote: 'Waiting for a new book quote after expiry',
+  waiting_for_stream_book: 'Waiting for a fresh streamed book or REST fallback',
   quote_expired_before_order: 'Quote expired before order',
   outside_live_stake_cap: 'Order exceeds $5 cap',
 };
@@ -809,6 +810,7 @@ function renderWcbb(now, query) {
         game.order_state ? readableStatus(game.order_state) : wcbbStatus[game.status],
         game.retry_after_seconds ? 'Retry window ' + game.retry_after_seconds + 's' : '',
         game.book_age_seconds ? 'Book age ' + game.book_age_seconds + 's' : '',
+        live && Number.isFinite(game.ask) ? (game.book_source === 'websocket' ? 'Streamed book' : 'REST book') : '',
       ].filter(Boolean).join(' · '), 'muted'));
     addWcbbMarketLink(info, game.market_url);
     const numbers = element('div', '', 'numbers');

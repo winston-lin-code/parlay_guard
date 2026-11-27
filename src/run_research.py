@@ -5,18 +5,17 @@ import base64
 import os
 from pathlib import Path
 import sqlite3
+from threading import Event
 
 import uvicorn
 
 from .env_config import env_value
-from .pregame_capture import KEY_ID_VAR, SECRET_VAR, read_env_file
+from .pregame_capture import KEY_ID_VAR, SECRET_VAR, read_env_file, signing_credentials
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def live_client(env_file):
-    from polymarket_us import PolymarketUS
-
+def live_credentials(env_file):
     if env_file:
         key, secret = read_env_file(env_file)
     else:
@@ -31,6 +30,11 @@ def live_client(env_file):
         size = 0
     if size not in (32, 64):
         raise ValueError("Invalid Polymarket US secret key format.")
+    return key, secret
+
+
+def live_client(key, secret):
+    from polymarket_us import PolymarketUS
 
     def client():
         return PolymarketUS(key_id=key, secret_key=secret, timeout=6, max_retries=0)
@@ -67,13 +71,16 @@ def main():
 
     from .api import app, inplay_scanner
     from .pro_halftime_orders import DEFAULT_LIVE_DB, AutomaticOrders
+    from .tennis_wager import BookStream
     from .wcbb_anytime import BOOK_MAX_AGE, LIVE_DB_PATH
 
     if args.live_halftime or args.live_wcbb:
         try:
-            client = live_client(args.env_file)
+            key, secret = live_credentials(args.env_file)
+            client = live_client(key, secret)
             if args.live_wcbb:
                 verify_account(client)
+                inplay_scanner.wcbb_books = BookStream(signing_credentials(key, secret), Event(), request_id="wcbb-anytime")
                 inplay_scanner.wcbb_orders = AutomaticOrders(ROOT / LIVE_DB_PATH, client, max_book_age=BOOK_MAX_AGE,
                                                             retry_expired=True)
             if args.live_halftime:
