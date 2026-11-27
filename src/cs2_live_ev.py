@@ -5,13 +5,13 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from functools import lru_cache
 from math import comb
-import os
 import re
 import time
 
 import requests
 
 from .cs2_ratings import MAX_RATING_AGE, analyzer_ratings, fragcharts_ratings, predict_ratings, team_key
+from .env_config import env_value
 from .inplay_scan import PROBABILITY_HAIRCUT, read_json, utc
 from .pro_live_ev import best_paper_quote
 from .us_wager import GATEWAY, SLUG, ONE, decimal, public
@@ -324,6 +324,7 @@ def evaluate(match, ratings, cito_rows, key):
 
 class Reader:
     def __init__(self):
+        self.cito_key = env_value("CS2_CITO_API_KEY")
         self.ratings = []
         self.rating_warnings = []
         self.rating_checked = float("-inf")
@@ -357,7 +358,7 @@ class Reader:
             self.pending_ratings = pool.submit(self.fetch_ratings)
         reference = now()
         self.ratings = [source for source in self.ratings if timedelta(0) <= reference - source.as_of <= MAX_RATING_AGE]
-        key = os.getenv("CS2_CITO_API_KEY")
+        key = self.cito_key
         if key and tick - self.cito_checked >= CITO_INTERVAL:
             self.cito_checked = tick
             try:

@@ -2,10 +2,27 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from src import cs2_live_ev as cs2, cs2_ratings as elo
+from src import env_config
 
 NOW = datetime(2026, 11, 27, 18, 3, 15, tzinfo=timezone.utc)
 SLUG = "cs2-navi-m80-2026-11-27"
 MARKET = "aec-" + SLUG
+
+
+def test_reader_loads_project_env_outside_the_project_directory(monkeypatch, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text('CS2_CITO_API_KEY="test#key"\nUNRELATED_TEST_SETTING=unused\n', encoding="utf-8-sig")
+    monkeypatch.setattr(env_config, "PROJECT_ENV", env_file)
+    monkeypatch.delenv("CS2_CITO_API_KEY", raising=False)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    assert cs2.Reader().cito_key == "test#key"
+    monkeypatch.setenv("CS2_CITO_API_KEY", "process-value")
+    assert cs2.Reader().cito_key == "process-value"
+    monkeypatch.setenv("CS2_CITO_API_KEY", "")
+    assert cs2.Reader().cito_key == ""
 
 
 def event():
