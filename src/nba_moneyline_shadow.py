@@ -162,7 +162,7 @@ def retry_espn(fetch, *args, **kwargs):
     return fetch(*args, **kwargs)
 
 
-def signal_for(game, contract, assignments, books):
+def market_at_score(game, contract, assignments, books):
     try:
         summary = retry_espn(halftime.read_json, "GET", SUMMARY_URL, max_age=15, params={"event": game["id"]},
                              headers={"Cache-Control": "no-cache"})
@@ -199,7 +199,16 @@ def signal_for(game, contract, assignments, books):
         return None, "No executable ask for the selected team"
     if ask < MIN_PRICE:
         return None, "Best ask below 20 cents"
-    offer = best_paper_quote(contract, side, float(probability), book, STAKE, SLIPPAGE, received)
+    return {"book": book, "received": received, "quoted": quoted, "source": source, "score_at": score_at,
+            "selected": selected, "probability": probability, "side": side, "ask": ask, "levels": levels}, None
+
+
+def signal_for(game, contract, assignments, books):
+    market, reason = market_at_score(game, contract, assignments, books)
+    if market is None:
+        return None, reason
+    probability, side = market["probability"], market["side"]
+    offer = best_paper_quote(contract, side, float(probability), market["book"], STAKE, SLIPPAGE, market["received"])
     if not offer:
         return None, "Insufficient executable depth within the $5 cap"
     if offer["screened_ev"] < float(MIN_EV):
@@ -208,14 +217,15 @@ def signal_for(game, contract, assignments, books):
     small = full // 2
     minimum = int(decimal(contract["minimumTradeQty"]).to_integral_value(rounding=ROUND_CEILING))
     limit = decimal(offer["limit"])
-    signal = {"game_id": game["id"], "market": contract["slug"], "long": long,
+    signal = {"game_id": game["id"], "market": contract["slug"], "long": side["long"],
             "matchup": " vs ".join(display_team(game["teams"][key]) for key in ("away", "home")),
-            "team": display_team(game["teams"][selected]), "checkpoint": game["checkpoint"],
+            "team": display_team(game["teams"][market["selected"]]), "checkpoint": game["checkpoint"],
             "clock": game["clock_text"], "away_score": game["scores"]["away"], "home_score": game["scores"]["home"],
             "probability": float(probability), "screened_ev": offer["screened_ev"], "limit": str(limit),
-            "initial_ask": str(ask), "initial_depth_at_limit": str(sum(size for price, size in levels if price <= limit)),
-            "initial_book_utc": quoted.isoformat(), "initial_book_source": source,
-            "score_utc": score_at.isoformat(), "signal_utc": received.isoformat(),
+            "initial_ask": str(market["ask"]),
+            "initial_depth_at_limit": str(sum(size for price, size in market["levels"] if price <= limit)),
+            "initial_book_utc": market["quoted"].isoformat(), "initial_book_source": market["source"],
+            "score_utc": market["score_at"].isoformat(), "signal_utc": market["received"].isoformat(),
             "full_quantity": full, "half_shares_quantity": small if small >= max(1, minimum) else 0}
     return signal, None
 
@@ -262,16 +272,9 @@ def delayed_execution(signal, contract, books):
 
 
 def scan(ledger, latency, *, explain=False, stream=None):
-    reference = now()
-    started = reference.astimezone(halftime.ET)
-    day = started.date()
-    days = (day - timedelta(days=1), day) if started.hour < 6 else (day,)
-    tips = (reference - timedelta(hours=8), reference + timedelta(hours=2))
     seen = ledger.seen()
-    games, warnings = {}, []
-    books = OrderBooks(stream)
 
-    def check(game, match):
+    def check(game, match, books):
         windows = [window for window in WINDOWS if (game["id"], window) not in seen
                    and (window == "anytime" or game["inside_window"])]
         if not windows:
@@ -293,6 +296,17 @@ def scan(ledger, latency, *, explain=False, stream=None):
         ledger.record_execution(game["id"], windows, delayed_execution(signal, contract, books))
         return len(windows), None
 
+    return scan_games(check, explain=explain, stream=stream)
+
+
+def scan_games(check, *, explain=False, stream=None):
+    reference = now()
+    started = reference.astimezone(halftime.ET)
+    day = started.date()
+    days = (day - timedelta(days=1), day) if started.hour < 6 else (day,)
+    tips = (reference - timedelta(hours=8), reference + timedelta(hours=2))
+    games, warnings = {}, []
+    books = OrderBooks(stream)
     with ThreadPoolExecutor(max_workers=6) as pool:
         inventory = pool.submit(halftime.live_inventory, "NBA", start_window=tips)
         for date in days:
@@ -325,7 +339,7 @@ def scan(ledger, latency, *, explain=False, stream=None):
             stream.set_markets(match[1]["slug"] for match in matches if match)
             if stream.error:
                 warnings.append(stream.error)
-        outcomes = list(pool.map(check, games.values(), matches))
+        outcomes = list(pool.map(lambda game, match: check(game, match, books), games.values(), matches))
     rejected = Counter(reason for _, reason in outcomes if reason)
     if rejected:
         warnings.append("Skipped · " + " · ".join(f"{count} {reason}" for reason, count in rejected.most_common()))

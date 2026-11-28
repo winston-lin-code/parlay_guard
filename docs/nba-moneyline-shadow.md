@@ -56,3 +56,28 @@ signals that miss the probability, price, or EV thresholds.
 ```powershell
 python -m src.nba_moneyline_shadow --once --explain
 ```
+
+## Live NBA halftime with quarter Kelly
+
+Run this command from the project folder to check the Polymarket US credentials
+in `.env` and read the account's USD buying power.
+
+```powershell
+python -m src.nba_halftime_kelly --check-account
+```
+
+Start real-money automatic orders with the live flag.
+
+```powershell
+python -m src.nba_halftime_kelly --live --explain
+```
+
+This runner uses the same NBA halftime window, ESPN probability threshold,
+20¢ minimum ask, 5% screened EV floor, and five-point haircut as the paper
+study. It sizes whole shares using the account's available USD buying power.
+Quarter Kelly uses the all-in cost per share, including estimated fees and a
+1¢ cushion. The all-in wager is capped at 2% of buying power and $5 per game.
+The fill-or-kill order uses the quoted limit on the book. Use Ctrl+C to stop
+scanning. The order ledger at `data/live_orders/nba_halftime_kelly.sqlite3`
+deduplicates games across restarts and permits one retry after the exchange
+confirms a zero-fill expiry and a fresh quote still qualifies.
