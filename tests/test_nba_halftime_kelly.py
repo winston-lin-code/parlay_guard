@@ -1,6 +1,7 @@
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -147,3 +148,27 @@ def test_buying_power_requires_valid_usd_balance():
         live.buying_power(client)
     account.balances.return_value = {"currency": "USD", "buyingPower": 100, "currentBalance": 200}
     assert live.buying_power(client) == Decimal("100")
+
+
+@pytest.mark.parametrize(("bankroll", "reason"), [
+    ("0", "No positive USD buying power reported by Polymarket US"),
+    (".49", "USD buying power is too small for a one-cent per-game cap"),
+])
+def test_zero_stake_cap_reports_its_cause(bankroll, reason):
+    assert live.quarter_kelly_quote({}, {}, {}, Decimal(bankroll)) == (None, reason)
+
+
+def test_check_account_reports_actual_buying_power_and_cap_without_order_setup(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["nba_halftime_kelly", "--check-account"])
+    monkeypatch.setattr(live, "live_credentials", lambda _: ("test", "test"))
+    client = MagicMock()
+    account = client.return_value.__enter__.return_value.account
+    account.balances.return_value = {"balances": [{"currency": "USD", "buyingPower": 23.75, "currentBalance": 100}]}
+    monkeypatch.setattr(live, "live_client", lambda *_: client)
+    orders = MagicMock()
+    monkeypatch.setattr(live, "AutomaticOrders", orders)
+    live.main()
+    text = capsys.readouterr().out
+    assert "Available USD buying power · $23.75" in text
+    assert "Per-game cap before quarter Kelly · $0.47" in text
+    orders.assert_not_called()

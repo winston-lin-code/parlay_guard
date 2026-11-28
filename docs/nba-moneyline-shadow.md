@@ -60,7 +60,7 @@ python -m src.nba_moneyline_shadow --once --explain
 ## Live NBA halftime with quarter Kelly
 
 Run this command from the project folder to check the Polymarket US credentials
-in `.env` and read the account's USD buying power.
+in `.env` and see the available USD buying power and per-game cap.
 
 ```powershell
 python -m src.nba_halftime_kelly --check-account

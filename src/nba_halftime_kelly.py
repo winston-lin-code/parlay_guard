@@ -36,10 +36,18 @@ def buying_power(client):
     return max(Decimal(0), balance)
 
 
+def stake_cap(bankroll):
+    return min(LIVE_STAKE, bankroll * MAX_BANKROLL_FRACTION).quantize(CENT, rounding=ROUND_DOWN)
+
+
 def quarter_kelly_quote(game, contract, market, bankroll, *, explain=False):
+    maximum = stake_cap(bankroll)
+    if maximum == 0:
+        reason = ("No positive USD buying power reported by Polymarket US" if bankroll == 0
+                  else "USD buying power is too small for a one-cent per-game cap")
+        return None, reason
     pick = {"side": display_team(game["teams"][market["selected"]]), "probability": market["probability"]}
     adjusted = max(Decimal(0), market["probability"] - decimal(PROBABILITY_HAIRCUT))
-    maximum = min(LIVE_STAKE, bankroll * MAX_BANKROLL_FRACTION).quantize(CENT, rounding=ROUND_DOWN)
     minimum = max(1, int(decimal(contract["minimumTradeQty"]).to_integral_value(rounding=ROUND_CEILING)))
     cheapest, best_ev, closest = None, None, None
     book_error = "Exchange minimum exceeds the maximum stake at the current ask"
@@ -151,9 +159,11 @@ def main():
     try:
         key, secret = live_credentials(args.env_file)
         client = live_client(key, secret)
-        buying_power(client)
+        bankroll = buying_power(client)
         if args.check_account:
-            print("Polymarket US authentication and USD buying power verified.", flush=True)
+            print("Polymarket US authentication verified.", flush=True)
+            print(f"Available USD buying power · ${bankroll:,.2f}", flush=True)
+            print(f"Per-game cap before quarter Kelly · ${stake_cap(bankroll):.2f}", flush=True)
             return
         stream = BookStream(signing_credentials(key, secret), Event(), request_id="nba-halftime-kelly")
         orders = AutomaticOrders(LIVE_DB, client, max_book_age=MAX_BOOK_AGE, retry_expired=True)
@@ -164,6 +174,8 @@ def main():
     worker = Thread(target=stream.follow, args=(stop,), daemon=True)
     worker.start()
     print(f"LIVE · NBA halftime quarter Kelly · $5 and 2% per-game caps · {LIVE_DB}", flush=True)
+    if stake_cap(bankroll) == 0:
+        print("Current per-game cap is $0.00. Run --check-account to see available USD buying power.", flush=True)
     last_refresh = float("-inf")
     try:
         while True:
