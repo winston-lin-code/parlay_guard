@@ -40,3 +40,11 @@ python -m src.nba_moneyline_shadow --report
 
 You can set the default delay with `NBA_SHADOW_LATENCY_SECONDS` in `.env`.
 Use `--output` to give a different latency test its own ledger directory.
+
+Use `--explain` to show the reason each game was skipped. The runner reports
+ESPN summary errors and Polymarket order-book rate limits separately from
+signals that miss the probability, price, or EV thresholds.
+
+```powershell
+python -m src.nba_moneyline_shadow --once --explain
+```

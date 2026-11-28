@@ -2,6 +2,8 @@ import csv
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+import requests
+
 from src import nba_moneyline_shadow as study
 
 
@@ -30,6 +32,16 @@ def test_shadow_study_keeps_same_limit_for_both_sizes_and_settles_once(monkeypat
                "wallclock": (NOW - timedelta(seconds=20)).isoformat(), "period": {"number": 2}}],
                "winprobability": [{"playId": "play-1", "homeWinPercentage": .76}]}
     reads = []
+    summary_reads = []
+    feed_up = False
+
+    def read_summary(*args, **kwargs):
+        summary_reads.append(kwargs["params"]["event"])
+        if not feed_up:
+            response = requests.Response()
+            response.status_code = 503
+            raise requests.HTTPError("fixture summary outage", response=response)
+        return summary
 
     def book(slug):
         assert slug == MARKET
@@ -46,10 +58,16 @@ def test_shadow_study_keeps_same_limit_for_both_sizes_and_settles_once(monkeypat
     monkeypatch.setattr(study, "now", lambda: moment)
     monkeypatch.setattr(study, "sleep", delay)
     monkeypatch.setattr(study, "fresh_book", book)
-    monkeypatch.setattr(study.halftime, "read_json", lambda *args, **kwargs: summary)
+    monkeypatch.setattr(study.halftime, "read_json", read_summary)
     monkeypatch.setattr(study, "scoreboard", lambda *args: [event])
     monkeypatch.setattr(study.halftime, "live_inventory", lambda *args, **kwargs: ({"NBA": [(EVENT, contract)]}, []))
     ledger = study.Ledger(tmp_path)
+    assert study.scan(ledger, 2, explain=True) == (1, 0, [
+        "Skipped · 1 ESPN win-probability feed returned HTTP 503",
+        "PHX vs HOU · Before halftime 3:42 · ESPN win-probability feed returned HTTP 503",
+    ])
+    assert len(summary_reads) == 2 and reads == [] and ledger.entries() == []
+    feed_up = True
     assert study.scan(ledger, 2) == (1, 2, [])
     assert study.scan(study.Ledger(tmp_path), 2) == (1, 0, [])
     assert reads == [NOW, NOW + timedelta(seconds=2)]

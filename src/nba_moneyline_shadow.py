@@ -1,6 +1,7 @@
 """Forward paper test of NBA moneyline timing and order size on Polymarket US."""
 
 import argparse
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 import csv
@@ -13,11 +14,13 @@ import sqlite3
 from tempfile import NamedTemporaryFile
 from time import monotonic, sleep
 
+import requests
+
 from . import halftime_paper as halftime
 from .env_config import env_value
 from .inplay_scan import scoreboard, utc
 from .pro_live_ev import best_paper_quote
-from .us_wager import BOOK_MAX_AGE, ONE, SCANNER_BOOKS, buy_levels, decimal, public, quote_order
+from .us_wager import BOOK_MAX_AGE, ONE, SCANNER_BOOKS, BookRateLimited, buy_levels, decimal, public, quote_order
 from .wcbb_anytime import (MIN_EV, MIN_PRICE, MIN_PROBABILITY, SLIPPAGE, STAKE, display_team,
                            forecast, game_state, now, settled_payout, settlement_market_batches)
 
@@ -101,38 +104,73 @@ def book_timestamp(book, slug, reference):
     return None
 
 
+def feed_issue(source, exc):
+    if isinstance(exc, BookRateLimited):
+        return f"{source} rate-limited"
+    response = exc.response if isinstance(exc, requests.HTTPError) else None
+    if response is not None:
+        return f"{source} returned HTTP {response.status_code}"
+    if str(exc) == "Upstream returned a cached live feed":
+        return f"{source} returned a stale response"
+    return f"{source} unavailable ({type(exc).__name__})"
+
+
+def retry_espn(fetch, *args, **kwargs):
+    try:
+        return fetch(*args, **kwargs)
+    except requests.HTTPError as exc:
+        response = exc.response
+        if response is None or response.status_code not in (502, 503, 504):
+            raise
+    return fetch(*args, **kwargs)
+
+
 def signal_for(game, contract, assignments):
-    summary = halftime.read_json("GET", SUMMARY_URL, max_age=15, params={"event": game["id"]},
-                                 headers={"Cache-Control": "no-cache"})
-    book = fresh_book(contract["slug"])
+    try:
+        summary = retry_espn(halftime.read_json, "GET", SUMMARY_URL, max_age=15, params={"event": game["id"]},
+                             headers={"Cache-Control": "no-cache"})
+    except halftime.FEED_ERRORS as exc:
+        return None, feed_issue("ESPN win-probability feed", exc)
+    if not isinstance(summary, dict) or not summary.get("winprobability") or not summary.get("plays"):
+        return None, "ESPN provided no play-by-play win probability"
+    try:
+        book = fresh_book(contract["slug"])
+    except halftime.FEED_ERRORS as exc:
+        return None, feed_issue("Polymarket US order book", exc)
     received = now()
     quoted = book_timestamp(book, contract["slug"], received)
-    if quoted is None or quoted < game["tip"] or book.get("state") != "MARKET_STATE_OPEN":
-        return None
+    if quoted is None or quoted < game["tip"]:
+        return None, "No fresh Polymarket US order book"
+    if book.get("state") != "MARKET_STATE_OPEN":
+        return None, "Polymarket US book paused or closed"
     estimate = forecast(summary, game, quoted)
     if estimate is None:
-        return None
+        return None, "No eligible ESPN win probability for the quote-time score"
     home, score_at = estimate
     selected = "home" if home >= Decimal(".5") else "away"
     probability = home if selected == "home" else ONE - home
     if probability <= MIN_PROBABILITY:
-        return None
+        return None, "Win probability at or below 60%"
     long = assignments[selected]
     side = next(side for side in contract["marketSides"] if side["long"] is long)
     if side.get("tradable") is not True:
-        return None
+        return None, "Selected moneyline side unavailable"
     levels = buy_levels(book, long)
     ask = min((price for price, _ in levels), default=None)
-    if ask is None or ask < MIN_PRICE:
-        return None
+    if ask is None:
+        return None, "No executable ask for the selected team"
+    if ask < MIN_PRICE:
+        return None, "Best ask below 20 cents"
     offer = best_paper_quote(contract, side, float(probability), book, STAKE, SLIPPAGE, received)
-    if not offer or offer["screened_ev"] < float(MIN_EV):
-        return None
+    if not offer:
+        return None, "Insufficient executable depth within the $5 cap"
+    if offer["screened_ev"] < float(MIN_EV):
+        return None, "Screened EV below 5%"
     full = offer["quantity"]
     small = full // 2
     minimum = int(decimal(contract["minimumTradeQty"]).to_integral_value(rounding=ROUND_CEILING))
     limit = decimal(offer["limit"])
-    return {"game_id": game["id"], "market": contract["slug"], "long": long,
+    signal = {"game_id": game["id"], "market": contract["slug"], "long": long,
             "matchup": " vs ".join(display_team(game["teams"][key]) for key in ("away", "home")),
             "team": display_team(game["teams"][selected]), "checkpoint": game["checkpoint"],
             "clock": game["clock_text"], "away_score": game["scores"]["away"], "home_score": game["scores"]["home"],
@@ -140,6 +178,7 @@ def signal_for(game, contract, assignments):
             "initial_ask": str(ask), "initial_depth_at_limit": str(sum(size for price, size in levels if price <= limit)),
             "initial_book_utc": quoted.isoformat(), "score_utc": score_at.isoformat(), "signal_utc": received.isoformat(),
             "full_quantity": full, "half_shares_quantity": small if small >= max(1, minimum) else 0}
+    return signal, None
 
 
 def delayed_execution(signal, contract):
@@ -174,10 +213,10 @@ def delayed_execution(signal, contract):
                     result[size] = {"status": "no_fill"}
         return result
     except halftime.FEED_ERRORS as exc:
-        return {"reason": type(exc).__name__}
+        return {"reason": feed_issue("Polymarket US delayed book", exc)}
 
 
-def scan(ledger, latency):
+def scan(ledger, latency, *, explain=False):
     reference = now()
     started = reference.astimezone(halftime.ET)
     day = started.date()
@@ -190,32 +229,32 @@ def scan(ledger, latency):
         windows = [window for window in WINDOWS if (game["id"], window) not in seen
                    and (window == "anytime" or game["inside_window"])]
         if not windows:
-            return 0, 0
+            return 0, None
         try:
             matches = [match for slug, market in listings if (match := halftime.verified_contract(game, slug, market))]
             if len(matches) != 1:
-                return 0, 0
+                return 0, "No uniquely matched Polymarket US moneyline"
             _, contract, assignments = matches[0]
-            signal = signal_for(game, contract, assignments)
-        except halftime.FEED_ERRORS:
-            return 0, 1
+            signal, reason = signal_for(game, contract, assignments)
+        except halftime.FEED_ERRORS as exc:
+            return 0, feed_issue("NBA pricing data", exc)
         if signal is None:
-            return 0, 0
+            return 0, reason
         signal["requested_delay_seconds"] = latency
         windows = ledger.reserve(signal, windows)
         if not windows:
-            return 0, 0
+            return 0, None
         sleep(latency)
         ledger.record_execution(game["id"], windows, delayed_execution(signal, contract))
-        return len(windows), 0
+        return len(windows), None
 
     with ThreadPoolExecutor(max_workers=6) as pool:
         inventory = pool.submit(halftime.live_inventory, "NBA", start_window=tips)
         for date in days:
             try:
-                events = scoreboard(date)
+                events = retry_espn(scoreboard, date)
             except halftime.FEED_ERRORS as exc:
-                warnings.append(f"ESPN NBA scoreboard unavailable ({type(exc).__name__})")
+                warnings.append(feed_issue("ESPN NBA scoreboard", exc))
                 continue
             for event in events:
                 if (event.get("season") or {}).get("type") not in (2, "2"):
@@ -229,11 +268,17 @@ def scan(ledger, latency):
         try:
             listings = inventory.result()[0].get("NBA", [])
         except halftime.FEED_ERRORS as exc:
-            return len(games), 0, [*warnings, f"Polymarket US NBA listings unavailable ({type(exc).__name__})"]
+            return len(games), 0, [*warnings, feed_issue("Polymarket US NBA listings", exc)]
         outcomes = list(pool.map(lambda game: check(game, listings), games.values()))
-    signals, errors = map(sum, zip(*outcomes)) if outcomes else (0, 0)
-    if errors:
-        warnings.append(f"Pricing feed unavailable for {errors} NBA games")
+    rejected = Counter(reason for _, reason in outcomes if reason)
+    if rejected:
+        warnings.append("Skipped · " + " · ".join(f"{count} {reason}" for reason, count in rejected.most_common()))
+    if explain:
+        for game, (_, reason) in zip(games.values(), outcomes):
+            if reason:
+                matchup = " vs ".join(display_team(game["teams"][side]) for side in ("away", "home"))
+                warnings.append(f"{matchup} · {game['checkpoint']} {game['clock_text']} · {reason}")
+    signals = sum(count for count, _ in outcomes)
     return len(games), signals, warnings
 
 
@@ -309,6 +354,7 @@ def main():
     parser.add_argument("--latency-seconds", type=float, default=env_value("NBA_SHADOW_LATENCY_SECONDS") or "2",
                         help="Assumed order delay before fetching the second book (default 2 seconds)")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Directory for the SQLite ledger and CSVs")
+    parser.add_argument("--explain", action="store_true", help="Show the reason each game was skipped")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--once", action="store_true", help="Run one scan, update settlements, and export reports")
     mode.add_argument("--report", action="store_true", help="Update settlements and export the existing ledger")
@@ -322,7 +368,7 @@ def main():
         while True:
             started = monotonic()
             if not args.report:
-                games, signals, warnings = scan(ledger, args.latency_seconds)
+                games, signals, warnings = scan(ledger, args.latency_seconds, explain=args.explain)
                 print(f"{games} live NBA games · {signals} new signals", flush=True)
                 for warning in warnings:
                     print(warning, flush=True)
