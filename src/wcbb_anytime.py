@@ -35,7 +35,7 @@ def now():
     return datetime.now(timezone.utc)
 
 
-def game_state(event):
+def game_state(event, *, league=LEAGUE):
     competitions = event.get("competitions") or []
     tip = utc(event.get("date"))
     if len(competitions) != 1 or tip is None or not event.get("id"):
@@ -44,8 +44,9 @@ def game_state(event):
     status = competition.get("status") or event.get("status") or {}
     kind = status.get("type") or {}
     period, clock = status.get("period"), status.get("clock")
+    quarter_seconds = halftime_paper.QUARTER_SECONDS.get(league, 600)
     if (kind.get("state") != "in" or kind.get("completed") or type(period) is not int or period < 1
-            or type(clock) not in (int, float) or not 0 <= clock <= (600 if period <= 4 else 300)):
+            or type(clock) not in (int, float) or not 0 <= clock <= (quarter_seconds if period <= 4 else 300)):
         return None
     teams, scores = {}, {}
     for side in competition.get("competitors", []):
@@ -56,7 +57,7 @@ def game_state(event):
     if set(teams) != {"home", "away"}:
         return None
     is_half = period == 2 and clock == 0 and kind.get("name") in ("STATUS_HALFTIME", "STATUS_END_PERIOD")
-    return {"id": str(event["id"]), "league": LEAGUE, "tip": tip, "teams": teams, "scores": scores,
+    return {"id": str(event["id"]), "league": league, "tip": tip, "teams": teams, "scores": scores,
             "period": period, "clock": clock, "clock_text": status.get("displayClock") or "",
             "checkpoint": "Halftime" if is_half else f"Q{period}" if period <= 4 else f"OT{period - 4}"}
 
@@ -251,11 +252,8 @@ def settled_payout(market, long):
     return prices[long]
 
 
-def settle(path):
-    pending = {entry["market"]: entry for entry in read_ledger(path)
-               if entry["settlement"] is None and type(entry.get("long")) is bool
-               and moneyline_url(entry.get("event"), entry.get("market"))}
-    slugs = list(pending)
+def settlement_market_batches(slugs):
+    slugs = list(dict.fromkeys(slugs))
     for offset in range(0, len(slugs), SETTLEMENT_BATCH_SIZE):
         batch = slugs[offset:offset + SETTLEMENT_BATCH_SIZE]
         # Resolved markets may be absent from /markets/slug/{slug}; the batch feed includes them.
@@ -263,11 +261,18 @@ def settle(path):
                             params={"slug": batch, "limit": len(batch)})
         if not isinstance(payload, dict) or not isinstance(payload.get("markets"), list):
             raise ValueError("Polymarket US omitted markets from the settlement response.")
+        yield [market for market in payload["markets"]
+               if isinstance(market, dict) and market.get("slug") in batch]
+
+
+def settle(path):
+    pending = {entry["market"]: entry for entry in read_ledger(path)
+               if entry["settlement"] is None and type(entry.get("long")) is bool
+               and moneyline_url(entry.get("event"), entry.get("market"))}
+    for markets in settlement_market_batches(pending):
         settled_at = now().isoformat()
         updates = []
-        for market in payload["markets"]:
-            if not isinstance(market, dict) or market.get("slug") not in batch:
-                continue
+        for market in markets:
             entry = pending[market["slug"]]
             payout = settled_payout(market, entry["long"])
             if payout is not None:

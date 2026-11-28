@@ -223,6 +223,8 @@ def live_inventory(league_filter=None, *, start_window=None):
     from .tennis_wager import us_score
 
     listings = {league: {} for league in OTHER_SCOREBOARDS}
+    if league_filter == "NBA":
+        listings["NBA"] = {}
     live_games = {}
     offset = 0
     while True:

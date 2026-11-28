@@ -207,6 +207,19 @@ def contract_url(event, contract, long):
             + urlencode({"marketSlug": market_slug, "outcomeId": outcome}))
 
 
+def buy_levels(book, long):
+    levels = []
+    for level in book.get("offers" if long else "bids", []):
+        px = level["px"]
+        if px.get("currency") != "USD":
+            continue
+        quoted = decimal(px.get("value"))
+        available = decimal(level.get("qty"))
+        if CENT <= quoted <= ONE - CENT and available > 0:
+            levels.append((quoted if long else ONE - quoted, available))
+    return levels
+
+
 def quote_order(pick, contract, long, quantity, book, now, *, slippage=Decimal("0")):
     slug = contract["slug"]
     timestamp = utc(book.get("transactTime"))
@@ -218,17 +231,8 @@ def quote_order(pick, contract, long, quantity, book, now, *, slippage=Decimal("
         raise WagerError("Polymarket US has no fresh price for this contract. Get a new US quote.")
     if quantity < decimal(contract.get("minimumTradeQty")):
         raise WagerError("This quantity is below the exchange minimum.")
-    levels = []
-    for level in book.get("offers" if long else "bids", []):
-        px = level["px"]
-        if px.get("currency") != "USD":
-            continue
-        quoted = decimal(px.get("value"))
-        available = decimal(level.get("qty"))
-        if CENT <= quoted <= ONE - CENT and available > 0:
-            levels.append((quoted if long else ONE - quoted, available))
     remaining = quantity
-    for limit, available in sorted(levels):
+    for limit, available in sorted(buy_levels(book, long)):
         remaining -= available
         if remaining <= 0:
             break
