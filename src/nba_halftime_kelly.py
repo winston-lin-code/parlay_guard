@@ -36,26 +36,49 @@ def buying_power(client):
     return max(Decimal(0), balance)
 
 
-def quarter_kelly_quote(game, contract, market, bankroll):
+def quarter_kelly_quote(game, contract, market, bankroll, *, explain=False):
     pick = {"side": display_team(game["teams"][market["selected"]]), "probability": market["probability"]}
     adjusted = max(Decimal(0), market["probability"] - decimal(PROBABILITY_HAIRCUT))
-    maximum = min(LIVE_STAKE, bankroll * MAX_BANKROLL_FRACTION)
+    maximum = min(LIVE_STAKE, bankroll * MAX_BANKROLL_FRACTION).quantize(CENT, rounding=ROUND_DOWN)
     minimum = max(1, int(decimal(contract["minimumTradeQty"]).to_integral_value(rounding=ROUND_CEILING)))
-    for quantity in range(int(maximum / market["ask"]), minimum - 1, -1):
+    cheapest, best_ev, closest = None, None, None
+    book_error = "Exchange minimum exceeds the maximum stake at the current ask"
+    for quantity in range(int(LIVE_STAKE / market["ask"]), minimum - 1, -1):
         try:
             payload, quote = quote_order(pick, contract, market["side"]["long"], quantity, market["book"],
                                          market["received"], slippage=SLIPPAGE)
-        except WagerError:
+        except WagerError as exc:
+            book_error = str(exc)
             continue
         total = decimal(quote["total_estimate"])
-        unit_cost = total / quantity
-        if unit_cost >= ONE or adjusted * quantity < (ONE + MIN_EV) * total:
+        cheapest = total if cheapest is None else min(cheapest, total)
+        if total > maximum:
             continue
+        ev = adjusted * quantity / total - ONE
+        best_ev = ev if best_ev is None else max(best_ev, ev)
+        if adjusted * quantity < (ONE + MIN_EV) * total:
+            continue
+        unit_cost = total / quantity
         allocation = bankroll * FRACTION * (adjusted - unit_cost) / (ONE - unit_cost)
         cap = min(maximum, allocation).quantize(CENT, rounding=ROUND_DOWN)
         if total <= cap:
-            return payload, quote, cap
-    return None
+            return (payload, quote, cap), None
+        miss = (total - cap, total, cap)
+        if closest is None or miss < closest:
+            closest = miss
+    if cheapest is None:
+        return None, book_error
+    if best_ev is None:
+        reason = "Minimum executable order exceeds the 2%/$5 cap"
+        detail = f"${cheapest:.2f} all-in vs ${maximum:.2f} cap"
+    elif closest is not None:
+        _, total, cap = closest
+        reason = "Quarter-Kelly allocation too small for an EV-qualified order"
+        detail = f"${total:.2f} all-in vs ${cap:.2f} Kelly budget"
+    else:
+        reason = "Best affordable screened EV below 5%"
+        detail = f"{best_ev:+.2%}, {market['probability']:.1%} win probability, ${market['ask']:.3f} best ask"
+    return None, f"{reason} ({detail})" if explain else reason
 
 
 def verify_checkpoint(game):
@@ -78,7 +101,7 @@ def scan(orders, client, stream, *, explain=False):
 
     def check(game, match, books):
         if not game["inside_window"]:
-            return 0, None
+            return 0, "Outside the halftime window"
         if match is None:
             return 0, "No uniquely matched Polymarket US moneyline"
         event, contract, assignments = match
@@ -91,9 +114,9 @@ def scan(orders, client, stream, *, explain=False):
                 return 0, reason
             with execution:
                 bankroll = buying_power(client)
-                sized = quarter_kelly_quote(game, contract, market, bankroll)
+                sized, reason = quarter_kelly_quote(game, contract, market, bankroll, explain=explain)
                 if sized is None:
-                    return 0, "No qualifying quantity within the quarter-Kelly budget"
+                    return 0, reason
                 if not verify_checkpoint(game):
                     return 0, "ESPN score or halftime checkpoint changed before submission"
                 payload, quote, cap = sized
