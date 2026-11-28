@@ -7,6 +7,16 @@ prospective evaluation.
 
 ## Inputs
 
+To prepare the inputs automatically, install the Parquet reader and run the
+downloader from the project folder. It downloads public SportsDataverse
+release files and joins season-specific group labels to ESPN team IDs for
+the Division I membership CSV. Completed files stay in place when you rerun.
+
+```powershell
+python -m pip install pyarrow
+python -m src.wcbb_history_download --data .\data\wcbb-history
+```
+
 Put these WeHoop files for each season ending in 2019 through 2026 in the same
 directory. The runner accepts the release Parquet files or CSVs with the same
 column names.
