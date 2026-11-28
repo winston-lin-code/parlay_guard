@@ -122,6 +122,7 @@ class ScanState:
                      "performance": wcbb_anytime.performance([]), "orders": [], "warnings": []}
         self.wcbb_orders = None
         self.wcbb_books = None
+        self.wcbb_model = None
         self.wcbb_order_read_error = None
         self.wcbb_settlement_error = None
         self.cs2 = {"updated_utc": None, "games": [], "warnings": [], "rating_sources": [], "round_feed": False}
@@ -238,13 +239,13 @@ class ScanState:
                 self.stop.wait(max(1, 5 - (time.monotonic() - started)))
 
     def wcbb_loop(self):
-        ledger = ROOT / wcbb_anytime.DB_PATH
+        ledger = ROOT / (wcbb_anytime.MODEL_DB_PATH if self.wcbb_model else wcbb_anytime.DB_PATH)
         start_index = 0
         while not self.stop.is_set():
             started = time.monotonic()
             try:
                 value = wcbb_anytime.scan(ledger, start_index=start_index, live_orders=self.wcbb_orders,
-                                          book_stream=self.wcbb_books)
+                                          book_stream=self.wcbb_books, model=self.wcbb_model)
                 start_index += 1
             except Exception as exc:
                 with self.lock:
@@ -255,9 +256,10 @@ class ScanState:
             self.stop.wait(max(3, 12 - (time.monotonic() - started)))
 
     def wcbb_settlement_loop(self):
+        ledger = ROOT / (wcbb_anytime.MODEL_DB_PATH if self.wcbb_model else wcbb_anytime.DB_PATH)
         while not self.stop.is_set():
             try:
-                wcbb_anytime.settle(ROOT / wcbb_anytime.DB_PATH)
+                wcbb_anytime.settle(ledger)
                 error = None
             except (sqlite3.Error, ValueError, OSError) as exc:
                 error = f"WCBB settlements unavailable ({type(exc).__name__})."

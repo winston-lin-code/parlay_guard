@@ -165,7 +165,7 @@ details > summary { color: var(--muted); font-size: .84rem; }
   <section class="panel" id="wcbb-panel" aria-labelledby="wcbb-heading" hidden>
     <header class="list-header"><h2 id="wcbb-heading">Women’s College Basketball Anytime</h2><p id="wcbb-mode">Polymarket US · Paper bets</p></header>
     <div class="section">
-      <p class="muted">First qualifying moneyline per game · Win probability above 60% · Screened EV at least 5% · 20¢ minimum ask · $5 all-in cap</p>
+      <p class="muted" id="wcbb-rule">First qualifying moneyline per game · Win probability above 60% · Screened EV at least 5% · 20¢ minimum ask · $5 all-in cap</p>
       <p class="muted">Screen includes a five-point probability haircut, estimated fees, and 1¢ per share in slippage.</p>
       <dl class="metrics" id="wcbb-performance"></dl>
     </div>
@@ -778,6 +778,12 @@ const wcbbStatus = {
   quote_expired_before_order: 'Quote expired before order',
   outside_live_stake_cap: 'Order exceeds $5 cap',
 };
+const wcbbModelStatus = {
+  espn_probability_unavailable: 'ESPN play-by-play unavailable',
+  waiting_for_probability: 'Waiting for a verified model checkpoint',
+  below_probability: 'Win probability below 60%',
+  below_ev: 'Screened EV at or below 5%',
+};
 const dollars = new Intl.NumberFormat('en-US', {style:'currency', currency:'USD'});
 const entryTime = new Intl.DateTimeFormat(undefined, {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
 
@@ -814,13 +820,17 @@ function renderWcbb(now, query) {
   text('wcbb-status', notice);
   $('wcbb-status').hidden = !notice;
   text('wcbb-mode', live ? 'Polymarket US · Real-money auto orders' : 'Polymarket US · Paper bets');
+  const allFeatures = Boolean(scan?.all_features);
+  text('wcbb-rule', allFeatures
+    ? 'All-feature logistic model · First qualifying moneyline per game · At least 60% win probability · Screened EV above 5% · 20¢ minimum ask · $5 all-in cap'
+    : 'First qualifying moneyline per game · Win probability above 60% · Screened EV at least 5% · 20¢ minimum ask · $5 all-in cap');
   $('wcbb-live-history').hidden = !live;
   $('wcbb-orders-empty').hidden = orders.length > 0;
   text('wcbb-orders-empty', scan?.orders?.length ? 'No orders match your search.' : 'No real-money orders recorded.');
   text('wcbb-count', current ? games.length + ' shown · ' + listed.length + ' US moneyline' + (listed.length === 1 ? '' : 's') : '');
   $('wcbb-empty').hidden = entries.length > 0;
   text('wcbb-empty', (scan?.entries || []).length ? 'No entries match your search.' : 'No paper entries yet.');
-  const key = JSON.stringify([totals, games, entries, orders]);
+  const key = JSON.stringify([allFeatures, totals, games, entries, orders]);
   if (key === wcbbFingerprint) return;
   wcbbFingerprint = key;
   const money = value => Number.isFinite(value) ? dollars.format(value) : '—';
@@ -841,7 +851,8 @@ function renderWcbb(now, query) {
     info.append(element('p', game.title, 'selection'),
       element('p', [game.score, game.checkpoint, game.clock,
         game.refreshing_order ? 'Rechecking after expiry' : '',
-        game.order_state ? readableStatus(game.order_state) : wcbbStatus[game.status],
+        game.order_state ? readableStatus(game.order_state) :
+          (allFeatures ? wcbbModelStatus[game.status] : null) || wcbbStatus[game.status],
         game.retry_after_seconds ? 'Retry window ' + game.retry_after_seconds + 's' : '',
         game.book_age_seconds ? 'Book age ' + game.book_age_seconds + 's' : '',
         live && Number.isFinite(game.ask) ? (game.book_source === 'websocket' ? 'Streamed book' : 'REST book') : '',

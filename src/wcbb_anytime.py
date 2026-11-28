@@ -15,8 +15,10 @@ from .inplay_scan import PROBABILITY_HAIRCUT, read_json, utc
 from .pro_live_ev import best_order_quote
 from .us_wager import (BOOK_MAX_AGE, EVENT_CACHE_MAX_AGE, GATEWAY, ONE, SCANNER_BOOKS, SLUG,
                        BookRateLimited, decimal, public)
+from .wcbb_all_features import MODEL_ID
 
 DB_PATH = Path("data/paper_trades/wcbb_anytime.sqlite3")
+MODEL_DB_PATH = DB_PATH.with_name("wcbb_all_features.sqlite3")
 LIVE_DB_PATH = Path("data/live_orders/wcbb_anytime.sqlite3")
 LEAGUE = "WCBB"
 STAKE = Decimal("5.00")
@@ -57,8 +59,11 @@ def game_state(event, *, league=LEAGUE):
     if set(teams) != {"home", "away"}:
         return None
     is_half = period == 2 and clock == 0 and kind.get("name") in ("STATUS_HALFTIME", "STATUS_END_PERIOD")
+    neutral = competition.get("neutralSite")
     return {"id": str(event["id"]), "league": league, "tip": tip, "teams": teams, "scores": scores,
             "period": period, "clock": clock, "clock_text": status.get("displayClock") or "",
+            "neutral_site": neutral if type(neutral) is bool else None,
+            "venue": str((competition.get("venue") or {}).get("id") or ""),
             "checkpoint": "Halftime" if is_half else f"Q{period}" if period <= 4 else f"OT{period - 4}"}
 
 
@@ -104,7 +109,7 @@ def moneyline_url(event, market):
     return None
 
 
-def scan_game(game, listings, previous, *, live_orders=None, book_stream=None, rest_budget=None):
+def scan_game(game, listings, previous, *, live_orders=None, book_stream=None, rest_budget=None, model=None):
     away, home = (game["teams"][key] for key in ("away", "home"))
     row = {"game_id": game["id"], "title": f"{display_team(away)} vs {display_team(home)}",
            "score": f"{away['abbreviation']} {game['scores']['away']} · {home['abbreviation']} {game['scores']['home']}",
@@ -169,7 +174,7 @@ def scan_game(game, listings, previous, *, live_orders=None, book_stream=None, r
             return {**row, "status": "no_fresh_book"}, None
         if retry and (previous_at is None or quoted <= previous_at):
             return {**row, "status": "waiting_for_retry_quote"}, None
-        estimate = forecast(summary, game, quoted)
+        estimate = model.forecast(summary, game, quoted, delay=SCORE_DELAY) if model else forecast(summary, game, quoted)
         if not estimate:
             return {**row, "status": "waiting_for_probability"}, None
         home_probability, score_at = estimate
@@ -177,7 +182,7 @@ def scan_game(game, listings, previous, *, live_orders=None, book_stream=None, r
         probability = home_probability if selected == "home" else ONE - home_probability
         row.update(side=display_team(game["teams"][selected]), probability=float(probability), status="below_probability",
                    quote_utc=quoted.isoformat())
-        if probability <= MIN_PROBABILITY:
+        if probability < MIN_PROBABILITY or (model is None and probability == MIN_PROBABILITY):
             return row, None
         long = assignments[selected]
         market_side = next(side for side in contract["marketSides"] if side["long"] is long)
@@ -191,14 +196,15 @@ def scan_game(game, listings, previous, *, live_orders=None, book_stream=None, r
         row["ask"] = float(ask)
         if ask < MIN_PRICE:
             return {**row, "status": "below_price"}, None
-        order_quote = best_order_quote(contract, market_side, float(probability), book, STAKE, SLIPPAGE, now())
+        order_quote = best_order_quote(contract, market_side, float(probability), book, STAKE, SLIPPAGE, now(),
+                                       strict_floor=model is not None)
         if not order_quote:
             return {**row, "status": "insufficient_depth"}, None
         order, quote = order_quote
         cost = decimal(quote["total_estimate"])
         ev = (probability - decimal(PROBABILITY_HAIRCUT)) * quote["quantity"] / cost - ONE
         row.update(limit=float(quote["limit"]), screened_ev=float(ev), cost=float(cost))
-        if ev < MIN_EV:
+        if ev < MIN_EV or (model is not None and ev == MIN_EV):
             return {**row, "status": "below_ev"}, None
         entry = {"game_id": game["id"], "event": event["slug"], "market": contract["slug"],
                  "title": row["title"], "side": row["side"], "long": long, "quote_utc": quoted.isoformat(),
@@ -206,6 +212,8 @@ def scan_game(game, listings, previous, *, live_orders=None, book_stream=None, r
                  "probability": row["probability"], "screened_ev": float(ev), "ask": row["ask"], "limit": quote["limit"],
                  "fee": quote["fee_estimate"], "cost": quote["total_estimate"], "quantity": quote["quantity"],
                  "order": order}
+        if model is not None:
+            entry["strategy"] = MODEL_ID
         return {**row, "status": "pending_recheck"}, entry
     except halftime_paper.FEED_ERRORS:
         return {**row, "status": "pricing_unavailable"}, None
@@ -312,7 +320,7 @@ def scoreboards(days):
     return events
 
 
-def scan(path, *, start_index=0, live_orders=None, book_stream=None):
+def scan(path, *, start_index=0, live_orders=None, book_stream=None, model=None):
     started = now().astimezone(halftime_paper.ET)
     day = started.date()
     days = (day - timedelta(days=1), day) if started.hour < 6 else (day,)
@@ -357,7 +365,7 @@ def scan(path, *, start_index=0, live_orders=None, book_stream=None):
         # request order between passes while preserving the dashboard order.
         completed = dict(zip(order, pool.map(
             lambda key: scan_game(games[key], market_list, previous, live_orders=live_orders, book_stream=book_stream,
-                                  rest_budget=rest_budget), order)))
+                                  rest_budget=rest_budget, model=model), order)))
         results = [completed[key] for key in ids]
     candidates = [entry for _, entry in results if entry]
     verified = {}
@@ -373,6 +381,7 @@ def scan(path, *, start_index=0, live_orders=None, book_stream=None):
         original, current = games[entry["game_id"]], verified.get(entry["game_id"])
         recorded = now()
         if (not current or any(current[key] != original[key] for key in ("scores", "period", "checkpoint"))
+                or (model is not None and any(current[key] != original[key] for key in ("neutral_site", "venue")))
                 or not -2 <= original["clock"] - current["clock"] <= SCORE_DELAY
                 or not 0 <= (recorded - utc(entry["quote_utc"])).total_seconds() <= BOOK_MAX_AGE):
             row["status"] = "state_changed"
@@ -400,6 +409,7 @@ def scan(path, *, start_index=0, live_orders=None, book_stream=None):
     if book_stream is not None and book_stream.error:
         warnings.append(f"{book_stream.error} The scanner is using limited REST fallback.")
     return {"status": "feed_unavailable" if warnings else "ready", "updated_utc": now().isoformat(),
+            "all_features": model is not None,
             "games": [row for row, _ in results], "performance": performance(ledger),
             "entries": [{**entry, "market_url": moneyline_url(entry.get("event"), entry.get("market"))}
                         for entry in ledger[:25]], "live_ordering": live, "orders": orders, "warnings": warnings}

@@ -71,7 +71,7 @@ def verified_for_pricing(official, market):
     return True
 
 
-def best_order_quote(contract, side, p, book, stake, slippage, reference):
+def best_order_quote(contract, side, p, book, stake, slippage, reference, *, strict_floor=False):
     pick = {"side": (side.get("team") or {}).get("name") or side.get("description"), "probability": p}
     minimum = max(1, int(decimal(contract["minimumTradeQty"]).to_integral_value(rounding=ROUND_CEILING)))
     low, high = minimum, min(int(stake / CENT), 10_000)
@@ -93,7 +93,8 @@ def best_order_quote(contract, side, p, book, stake, slippage, reference):
     best_order, best = largest
     quote = best
     # Smaller quantities can avoid paying through the top of a thin book.
-    while quote["screened_ev"] < MIN_SCREENED_ROI and quote["quantity"] > minimum:
+    while (quote["screened_ev"] < MIN_SCREENED_ROI
+           or strict_floor and quote["screened_ev"] == MIN_SCREENED_ROI) and quote["quantity"] > minimum:
         order, quote = quote_order(pick, contract, side["long"], quote["quantity"] - 1, book, reference,
                                    slippage=slippage)
         if quote["screened_ev"] > best["screened_ev"]:

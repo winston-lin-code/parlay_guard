@@ -3,7 +3,8 @@ import json
 import numpy as np
 import pandas as pd
 
-from src import wcbb_feature_experiments as experiment
+from src import train_wcbb_anytime, wcbb_feature_experiments as experiment
+from src.wcbb_all_features import AllFeatures, SEASON
 
 
 def make_game(game_id, season, tip, win):
@@ -112,3 +113,24 @@ def test_missing_inputs_leave_unique_audit_directories(tmp_path):
     for run in runs:
         assert (run / "missing_inputs.txt").is_file()
         assert "Historical ranking unavailable" in (run / "ranked_comparison.md").read_text()
+
+
+def test_live_artifact_fits_historical_years_and_releases_current_priors(tmp_path):
+    seasons = (*experiment.SEASONS, SEASON)
+    pd.DataFrame([(year, team) for year in seasons for team in (101, 102)],
+                 columns=["season", "team_id"]).to_csv(tmp_path / "division_i_teams.csv", index=False)
+    for year in seasons:
+        start = pd.Timestamp(f"{year - 1}-09-01T20:00:00Z")
+        fixtures = [make_game(year * 10 + index, year, start + pd.Timedelta(days=3 * index), bool(index))
+                    for index in range(2)]
+        for position, name in enumerate(("wbb_schedule", "play_by_play", "team_box")):
+            records = [row for fixture in fixtures for row in
+                       ([fixture[position]] if position == 0 else fixture[position])]
+            pd.DataFrame(records).to_csv(tmp_path / f"{name}_{year}.csv", index=False)
+    artifact = train_wcbb_anytime.build(tmp_path, threads=1)
+    assert artifact["trained_seasons"] == list(experiment.SEASONS)
+    assert artifact["training_games"] == 2 * len(experiment.SEASONS)
+    model = AllFeatures(artifact)
+    released = pd.Timestamp(artifact["context"]["101"][0][0], unit="s", tz="UTC")
+    assert model.team("101", released)[1:] == (None, None, None)
+    assert all(value is not None for value in model.team("101", released + pd.Timedelta(seconds=1))[1:])

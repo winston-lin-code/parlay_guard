@@ -238,7 +238,7 @@ def snapshots_for_season(plays, plan, boxes, counters):
     return games, snapshots
 
 
-def pregame_history(games):
+def pregame_history(games, *, on_release=None, through=None):
     ratings = defaultdict(lambda: 1500.)
     offense = defaultdict(float)
     defense = defaultdict(float)
@@ -247,9 +247,9 @@ def pregame_history(games):
     counts = Counter()
     pending, features = [], []
     last_update = pd.NaT
-    for game in sorted(games, key=lambda row: (row["tip"], row["game_id"])):
-        tip = game["tip"]
-        while pending and pending[0][0] < tip:
+    def release(before):
+        nonlocal last_update
+        while pending and pending[0][0] < before:
             last_update, _, prior, home_before, away_before = heapq.heappop(pending)
             a, b = prior["home_id"], prior["away_id"]
             p = 1 / (1 + 10 ** ((ratings[b] - ratings[a]) / 400))
@@ -265,6 +265,15 @@ def pregame_history(games):
                     offense[key] += pts
                     defense[key] += allowed
                     poss[key] += prior["possessions"]
+                if on_release is not None:
+                    on_release(last_update, prior["season"], team, ratings[team],
+                               100 * offense[key] / poss[key] if poss[key] else None,
+                               100 * defense[key] / poss[key] if poss[key] else None,
+                               opponent_elo[key] / counts[key])
+
+    for game in sorted(games, key=lambda row: (row["tip"], row["game_id"])):
+        tip = game["tip"]
+        release(tip)
         a, b = game["home_id"], game["away_id"]
         feature = {**game, "elo_diff": ratings[a] - ratings[b], "latest_pregame_input_utc": last_update}
         for side, team in (("home", a), ("away", b)):
@@ -277,6 +286,8 @@ def pregame_history(games):
         if pd.notna(game["available_at"]):
             assert game["available_at"] > tip
             heapq.heappush(pending, (game["available_at"], game["game_id"], game, ratings[a], ratings[b]))
+    if through is not None:
+        release(through)
     return pd.DataFrame(features)
 
 

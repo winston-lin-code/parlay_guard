@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 import pandas as pd
 import requests
@@ -67,22 +67,22 @@ def fetch(root, release, stem, columns, *, allow_csv=False):
             pending.unlink(missing_ok=True)
 
 
-def membership(groups, teams):
-    groups = groups[groups.league.eq("wbb") & groups.season.isin(SEASONS) & groups.level.isin(("subdivision", "division"))]
+def membership(groups, teams, seasons=SEASONS):
+    groups = groups[groups.league.eq("wbb") & groups.season.isin(seasons) & groups.level.isin(("subdivision", "division"))]
     labels = groups[["name", "short_name", "abbreviation"]].fillna("").apply(
         lambda col: col.str.lower().str.replace(r"[^a-z0-9]", "", regex=True))
     division = groups[labels.isin(DIVISION_I).any(axis=1)][["season", "group_id"]].drop_duplicates()
     counts = division.groupby("season").group_id.nunique()
-    if set(counts.index) != set(SEASONS) or not counts.eq(1).all():
+    if set(counts.index) != set(seasons) or not counts.eq(1).all():
         raise ValueError("SportsDataverse did not identify one unambiguous Division I group for each experiment season")
 
-    espn = teams[teams.league.eq("wbb") & teams.team_id_source.eq("espn") & teams.season.isin(SEASONS)].drop_duplicates()
+    espn = teams[teams.league.eq("wbb") & teams.team_id_source.eq("espn") & teams.season.isin(seasons)].drop_duplicates()
     if espn.duplicated(["season", "team_id"]).any():
         raise ValueError("SportsDataverse returned conflicting memberships for an ESPN team and season")
     joined = espn.merge(division, on="season", validate="many_to_one")
     members = joined[joined.subdivision_id.eq(joined.group_id) | joined.division_id.eq(joined.group_id)][["season", "team_id"]].copy()
     members["team_id"] = members.team_id.astype("string")
-    if not members.team_id.str.fullmatch(r"[1-9][0-9]*", na=False).all() or set(members.season) != set(SEASONS):
+    if not members.team_id.str.fullmatch(r"[1-9][0-9]*", na=False).all() or set(members.season) != set(seasons):
         raise ValueError("Division I team history is missing season coverage or contains invalid ESPN team IDs")
     return members.drop_duplicates().sort_values(["season", "team_id"])
 
@@ -137,18 +137,47 @@ def prepare(root, workers):
     return 0
 
 
+def refresh_context(root, workers):
+    from .wcbb_all_features import SEASON
+
+    membership_path = root / "division_i_teams.csv"
+    existing = pd.read_csv(membership_path, dtype={"team_id": "string"})
+    if not set(SEASONS) <= set(existing.season):
+        raise ValueError("Prepare the eight historical seasons before refreshing current team context")
+    jobs = [(release, f"{stem}_{SEASON}", fields) for release, stem, fields in DATASETS] + [
+        ("wbb_groups", "wbb_group_seasons", GROUPS),
+        ("wbb_groups", f"wbb_team_group_seasons_{SEASON}", TEAMS),
+    ]
+    with TemporaryDirectory(prefix=".wcbb-context-", dir=root) as directory:
+        stage = Path(directory)
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            files = list(executor.map(lambda job: fetch(stage, *job), jobs))
+        groups, teams = (pd.read_parquet(path) for path in files[-2:])
+        current = membership(groups, teams, (SEASON,))
+        merged = pd.concat([existing[existing.season.ne(SEASON)], current], ignore_index=True)
+        pending = stage / membership_path.name
+        merged.to_csv(pending, index=False)
+        for path in files[:-2]:
+            path.replace(root / path.name)
+        pending.replace(membership_path)
+    print(f"Ready · season ending {SEASON} context files · {len(current):,} Division I teams")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", type=Path, default=Path("data/wcbb-history"), help="Destination for season files")
     parser.add_argument("--workers", type=int, choices=range(1, 9), default=3)
+    parser.add_argument("--refresh-context", action="store_true",
+                        help="Refresh the current-season files used for pregame context by the live model")
     args = parser.parse_args(argv)
     try:
         import pyarrow.parquet  # noqa: F401
 
-        return prepare(args.data, args.workers)
+        return refresh_context(args.data, args.workers) if args.refresh_context else prepare(args.data, args.workers)
     except ImportError:
         parser.exit(2, "Install the downloader dependencies with python -m pip install requests pyarrow\n")
-    except (KeyError, ValueError, OSError) as exc:
+    except (KeyError, ValueError, OSError, requests.RequestException) as exc:
         parser.exit(2, f"WCBB history setup stopped: {exc}\n")
 
 

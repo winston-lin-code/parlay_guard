@@ -61,6 +61,8 @@ def main():
                         help="Automatically submit real MLB/NHL halftime orders with a $5 all-in cap per game")
     parser.add_argument("--live-wcbb", action="store_true",
                         help="Automatically submit real WCBB anytime orders with a $5 all-in cap per game")
+    parser.add_argument("--wcbb-model", type=Path, default=env_value("WCBB_ANYTIME_MODEL"),
+                        help="Use the exported all-feature WCBB model for paper or real-money orders")
     parser.add_argument("--env-file", type=Path, help="Override the project .env for Polymarket US credentials")
     args = parser.parse_args()
     if args.env_file and not (args.live_halftime or args.live_wcbb):
@@ -72,7 +74,14 @@ def main():
     from .api import app, inplay_scanner
     from .pro_halftime_orders import DEFAULT_LIVE_DB, AutomaticOrders
     from .tennis_wager import BookStream
+    from .wcbb_all_features import AllFeatures
     from .wcbb_anytime import BOOK_MAX_AGE, LIVE_DB_PATH
+
+    if args.wcbb_model:
+        try:
+            inplay_scanner.wcbb_model = AllFeatures.load(args.wcbb_model)
+        except (OSError, TypeError, ValueError, KeyError) as exc:
+            parser.error(f"WCBB all-feature model unavailable: {exc}")
 
     if args.live_halftime or args.live_wcbb:
         try:
@@ -91,7 +100,8 @@ def main():
             parser.error(str(exc))
 
     if args.live_wcbb:
-        print("Polymarket US authentication verified. WCBB real-money auto orders enabled.", flush=True)
+        model_name = "all-feature logistic" if inplay_scanner.wcbb_model else "ESPN probability"
+        print(f"Polymarket US authentication verified. WCBB real-money auto orders enabled ({model_name}).", flush=True)
     uvicorn.run(app, host=args.host, port=args.port, access_log=False)
 
 

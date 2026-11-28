@@ -2,6 +2,7 @@ from base64 import b64encode
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 import sys
 from threading import Barrier, Event
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ import pytest
 from src import env_config, pro_halftime_orders, run_research, wcbb_anytime as paper
 from src.inplay_api import ScanState
 from src.tennis_wager import BookStream
+from src.wcbb_all_features import FEATURES, MODEL_ID, SEASON, AllFeatures
 
 NOW = datetime(2026, 11, 27, 18, tzinfo=timezone.utc)
 EVENT = "wcbb-duke-unc-2026-11-27"
@@ -90,6 +92,33 @@ def test_rejects_newer_or_changed_state(monkeypatch):
     assert paper.forecast(summary, game, NOW) is None
     summary["plays"] = [summary["plays"][-1]]
     assert paper.forecast(summary, paper.game_state(fixture(4, 18)), NOW) is None
+
+
+def test_all_features_qualifies_first_confirmed_grid_and_uses_no_espn_estimate(monkeypatch):
+    contract, summary, book = inputs(1, .01, ".55")
+    game = paper.game_state(fixture())
+    summary["plays"] = [
+        {"wallclock": (NOW - timedelta(seconds=seconds)).isoformat(), "period": {"number": 1},
+         "clock": {"displayValue": clock}, "homeScore": 16, "awayScore": 10}
+        for seconds, clock in ((45, "2:10"), (20, "1:59"), (10, "1:40"))
+    ]
+    n = len(FEATURES)
+    artifact = {"model": MODEL_ID, "version": 1, "season": SEASON, "features": list(FEATURES),
+                "median": [0] * n, "mean": [0] * n, "scale": [1] * n, "weights": [0] * n,
+                "intercept": .4054651081081642, "generated_utc": (NOW - timedelta(days=1)).isoformat(),
+                "context": {"1": [[(NOW - timedelta(days=2)).timestamp(), 1520, 101, 96, 1505]]},
+                "members": [1, 2], "historical_elo": {"2": 1500}, "home_venues": {}}
+    model = AllFeatures(artifact)
+    assert model.forecast(summary, game, NOW, delay=15)[0] == Decimal(".60")
+    monkeypatch.setattr(paper, "now", lambda: NOW)
+    monkeypatch.setattr(paper, "read_json", lambda *args, **kwargs: summary)
+    monkeypatch.setattr(paper.SCANNER_BOOKS, "read", lambda *args, **kwargs: book)
+    row, entry = paper.scan_game(game, [(EVENT, contract)], {}, model=model)
+    assert row["status"] == "pending_recheck"
+    assert entry["side"] == "North Carolina" and entry["strategy"] == MODEL_ID
+    summary["plays"][-1]["homeScore"] = 18
+    row, entry = paper.scan_game(game, [(EVENT, contract)], {}, model=model)
+    assert row["status"] == "waiting_for_probability" and entry is None
 
 
 @pytest.mark.parametrize(("failure", "expected"), [
