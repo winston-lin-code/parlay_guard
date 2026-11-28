@@ -1,10 +1,13 @@
 import csv
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from threading import Event
 
+import pytest
 import requests
 
 from src import nba_moneyline_shadow as study
+from src import tennis_wager
 
 
 NOW = datetime(2026, 11, 28, 1, tzinfo=timezone.utc)
@@ -12,7 +15,8 @@ EVENT = "nba-pho-hou-2026-11-27"
 MARKET = "aec-" + EVENT
 
 
-def test_shadow_study_keeps_same_limit_for_both_sizes_and_settles_once(monkeypatch, tmp_path):
+@pytest.mark.parametrize("source", ["rest", "websocket"])
+def test_shadow_study_keeps_same_limit_for_both_sizes_and_settles_once(monkeypatch, tmp_path, source):
     moment = NOW
     tip = NOW - timedelta(minutes=40)
     event = {"id": "40123", "date": tip.isoformat(), "season": {"type": 2}, "competitions": [{
@@ -34,6 +38,7 @@ def test_shadow_study_keeps_same_limit_for_both_sizes_and_settles_once(monkeypat
     reads = []
     summary_reads = []
     feed_up = False
+    stream = study.BookStream(None, Event()) if source == "websocket" else None
 
     def read_summary(*args, **kwargs):
         summary_reads.append(kwargs["params"]["event"])
@@ -43,33 +48,43 @@ def test_shadow_study_keeps_same_limit_for_both_sizes_and_settles_once(monkeypat
             raise requests.HTTPError("fixture summary outage", response=response)
         return summary
 
-    def book(slug):
-        assert slug == MARKET
+    def book():
         reads.append(moment)
         bids = [{"px": {"value": ".50", "currency": "USD"}, "qty": "20" if len(reads) == 1 else "4"}]
         if len(reads) > 1:
             bids.append({"px": {"value": ".45", "currency": "USD"}, "qty": "30"})
-        return {"marketSlug": slug, "transactTime": moment.isoformat(), "state": "MARKET_STATE_OPEN", "bids": bids}
+        return {"marketSlug": MARKET, "transactTime": moment.isoformat(), "state": "MARKET_STATE_OPEN",
+                "bids": bids, "offers": []}
+
+    def rest_book(slug):
+        assert slug == MARKET and source == "rest"
+        return book()
 
     def delay(seconds):
         nonlocal moment
         moment += timedelta(seconds=seconds)
+        if stream:
+            stream.publish(stream.markets, book())
 
     monkeypatch.setattr(study, "now", lambda: moment)
+    monkeypatch.setattr(tennis_wager, "now", lambda: moment)
     monkeypatch.setattr(study, "sleep", delay)
-    monkeypatch.setattr(study, "fresh_book", book)
+    monkeypatch.setattr(study, "fresh_book", rest_book)
     monkeypatch.setattr(study.halftime, "read_json", read_summary)
     monkeypatch.setattr(study, "scoreboard", lambda *args: [event])
     monkeypatch.setattr(study.halftime, "live_inventory", lambda *args, **kwargs: ({"NBA": [(EVENT, contract)]}, []))
     ledger = study.Ledger(tmp_path)
-    assert study.scan(ledger, 2, explain=True) == (1, 0, [
+    assert study.scan(ledger, 2, explain=True, stream=stream) == (1, 0, [
         "Skipped · 1 ESPN win-probability feed returned HTTP 503",
         "PHX vs HOU · Before halftime 3:42 · ESPN win-probability feed returned HTTP 503",
     ])
     assert len(summary_reads) == 2 and reads == [] and ledger.entries() == []
+    if stream:
+        assert stream.markets == {MARKET}
+        stream.publish(stream.markets, book())
     feed_up = True
-    assert study.scan(ledger, 2) == (1, 2, [])
-    assert study.scan(study.Ledger(tmp_path), 2) == (1, 0, [])
+    assert study.scan(ledger, 2, stream=stream) == (1, 2, [])
+    assert study.scan(study.Ledger(tmp_path), 2, stream=stream) == (1, 0, [])
     assert reads == [NOW, NOW + timedelta(seconds=2)]
 
     market = {"slug": MARKET, "status": "MARKET_STATUS_RESOLVED",
@@ -81,12 +96,37 @@ def test_shadow_study_keeps_same_limit_for_both_sizes_and_settles_once(monkeypat
         rows = list(csv.DictReader(handle))
     assert len(rows) == 4 and {row["limit"] for row in rows} == {"0.50"}
     assert all(row["observed_delay_seconds"] == "2.0" for row in rows)
+    assert {row["initial_book_source"] for row in rows} == {source}
+    assert {row["delayed_book_source"] for row in rows} == {source}
     assert {row["net_pnl"] for row in rows if row["size"] == "full"} == {"0"}
     assert {row["net_pnl"] for row in rows if row["size"] == "half_shares"} == {"1.85"}
     with (tmp_path / "summary.csv").open(newline="") as handle:
         stats = list(csv.DictReader(handle))
     assert {row["roi_on_settled_cost"] for row in stats if row["size"] == "full"} == {""}
     assert all(Decimal(row["roi_on_settled_cost"]) > Decimal(".86") for row in stats if row["size"] == "half_shares")
+
+
+def test_delayed_check_rejects_a_pre_target_streamed_book_when_rest_is_rate_limited(monkeypatch):
+    stream = study.BookStream(None, Event())
+    stream.set_markets({MARKET})
+    monkeypatch.setattr(tennis_wager, "now", lambda: NOW + timedelta(seconds=1))
+    stream.publish(stream.markets, {"marketSlug": MARKET, "transactTime": NOW.isoformat(),
+                                    "state": "MARKET_STATE_OPEN", "bids": [], "offers": []})
+    monkeypatch.setattr(study, "now", lambda: NOW + timedelta(seconds=2))
+    monkeypatch.setattr(study, "DELAYED_STREAM_WAIT", 0)
+
+    def rate_limited(slug):
+        assert slug == MARKET
+        raise study.BookRateLimited(10)
+
+    monkeypatch.setattr(study, "fresh_book", rate_limited)
+    books = study.OrderBooks(stream)
+    signal = {"market": MARKET, "signal_utc": NOW.isoformat(), "requested_delay_seconds": 2}
+    for _ in range(study.REST_FALLBACKS_PER_SCAN):
+        assert study.delayed_execution(signal, {}, books) == {"reason": "Polymarket US delayed book rate-limited"}
+    assert study.delayed_execution(signal, {}, books) == {
+        "reason": "Waiting for a fresh streamed book · REST fallback budget reached"
+    }
 
 
 def test_unobserved_book_is_excluded_from_fill_rate_and_pnl():

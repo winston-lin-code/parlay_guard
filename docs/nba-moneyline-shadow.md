@@ -1,7 +1,12 @@
 # NBA moneyline paper study
 
 Run the study from the Parlay Guard project folder while regular-season NBA
-games are in progress. The runner uses public ESPN and Polymarket US data.
+games are in progress. The runner uses public ESPN scores and forecasts and
+Polymarket US order-book depth. It subscribes to the verified live NBA
+moneylines with the Polymarket US credentials in the project `.env`.
+With a configured stream it allows up to two paced REST fallbacks per scan for
+initial quotes and two for delayed checks. Without usable credentials at
+startup it uses paced REST.
 
 ```powershell
 python -m src.nba_moneyline_shadow --latency-seconds 2
@@ -17,8 +22,11 @@ The screen includes a five-point probability haircut, estimated fees, and
 Each signal compares two hypothetical fill-or-kill orders at the same limit.
 One uses the full screened quantity and the other uses half as many whole
 shares, rounded down to the nearest share. The runner waits the specified
-delay, fetches an uncached depth snapshot, and records whether it showed enough
-depth for each order. Reported costs use the worst executable level in that
+delay, then allows up to 750 ms for a new streamed snapshot received at or
+after the delay target. If none arrives, it uses an uncached REST snapshot
+when the fallback budget and rate limit permit. It records the source and
+actual delay and checks whether the snapshot showed enough depth for each
+order. Reported costs use the worst executable level in that
 snapshot, plus the fee and slippage estimates. Actual execution can differ
 as displayed liquidity changes or other orders reach it first.
 

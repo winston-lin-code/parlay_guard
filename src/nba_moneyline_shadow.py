@@ -12,6 +12,7 @@ from math import isfinite
 from pathlib import Path
 import sqlite3
 from tempfile import NamedTemporaryFile
+from threading import Event, Semaphore, Thread
 from time import monotonic, sleep
 
 import requests
@@ -19,7 +20,10 @@ import requests
 from . import halftime_paper as halftime
 from .env_config import env_value
 from .inplay_scan import scoreboard, utc
+from .pregame_capture import signing_credentials
 from .pro_live_ev import best_paper_quote
+from .run_research import live_credentials
+from .tennis_wager import BookStream
 from .us_wager import BOOK_MAX_AGE, ONE, SCANNER_BOOKS, BookRateLimited, buy_levels, decimal, public, quote_order
 from .wcbb_anytime import (MIN_EV, MIN_PRICE, MIN_PROBABILITY, SLIPPAGE, STAKE, display_team,
                            forecast, game_state, now, settled_payout, settlement_market_batches)
@@ -29,11 +33,14 @@ DEFAULT_OUTPUT = Path("data/paper_trades/nba_moneyline_shadow")
 WINDOWS = ("anytime", "halftime_window")
 SIZES = ("full", "half_shares")
 SCAN_INTERVAL = 12
+REST_FALLBACKS_PER_SCAN = 2
+DELAYED_STREAM_WAIT = 0.75
 SIGNAL_COLUMNS = (
     "window", "size", "game_id", "market", "long", "matchup", "team", "checkpoint", "clock", "away_score",
     "home_score", "probability", "screened_ev", "limit", "initial_ask", "initial_depth_at_limit", "score_utc",
-    "initial_book_utc", "signal_utc", "full_quantity", "half_shares_quantity", "requested_delay_seconds",
-    "delayed_book_utc", "observed_utc", "observed_delay_seconds", "delayed_depth_at_limit", "reason",
+    "initial_book_utc", "initial_book_source", "signal_utc", "full_quantity", "half_shares_quantity",
+    "requested_delay_seconds", "delayed_book_utc", "delayed_book_source", "observed_utc",
+    "observed_delay_seconds", "delayed_depth_at_limit", "reason",
     "quantity", "status", "estimated_cost", "payout", "settled_at", "net_pnl",
 )
 
@@ -97,6 +104,36 @@ def fresh_book(slug):
     return SCANNER_BOOKS.request(f"/v1/markets/{slug}/book", public, fresh_book=True)
 
 
+class BookUnavailable(ValueError):
+    pass
+
+
+class OrderBooks:
+    def __init__(self, stream):
+        self.stream = stream
+        self.initial_fallbacks = Semaphore(REST_FALLBACKS_PER_SCAN)
+        self.delayed_fallbacks = Semaphore(REST_FALLBACKS_PER_SCAN)
+
+    def read(self, slug, *, execution_at=None):
+        if self.stream is not None:
+            deadline = monotonic() + DELAYED_STREAM_WAIT
+            while True:
+                snapshot = self.stream.latest_snapshot(slug, clock=now, max_age=BOOK_MAX_AGE,
+                                                       received_at_or_after=execution_at)
+                if snapshot is not None:
+                    book, received = snapshot
+                    return book, received if execution_at else now(), "websocket"
+                remaining = deadline - monotonic()
+                if execution_at is None or self.stream.error or remaining <= 0:
+                    break
+                sleep(min(.05, remaining))
+            budget = self.delayed_fallbacks if execution_at else self.initial_fallbacks
+            if not budget.acquire(blocking=False):
+                raise BookUnavailable("Waiting for a fresh streamed book · REST fallback budget reached")
+        book = fresh_book(slug)
+        return book, now(), "rest"
+
+
 def book_timestamp(book, slug, reference):
     observed = utc(book.get("transactTime"))
     if book.get("marketSlug") == slug and observed and 0 <= (reference - observed).total_seconds() <= BOOK_MAX_AGE:
@@ -125,7 +162,7 @@ def retry_espn(fetch, *args, **kwargs):
     return fetch(*args, **kwargs)
 
 
-def signal_for(game, contract, assignments):
+def signal_for(game, contract, assignments, books):
     try:
         summary = retry_espn(halftime.read_json, "GET", SUMMARY_URL, max_age=15, params={"event": game["id"]},
                              headers={"Cache-Control": "no-cache"})
@@ -134,10 +171,11 @@ def signal_for(game, contract, assignments):
     if not isinstance(summary, dict) or not summary.get("winprobability") or not summary.get("plays"):
         return None, "ESPN provided no play-by-play win probability"
     try:
-        book = fresh_book(contract["slug"])
+        book, received, source = books.read(contract["slug"])
+    except BookUnavailable as exc:
+        return None, str(exc)
     except halftime.FEED_ERRORS as exc:
         return None, feed_issue("Polymarket US order book", exc)
-    received = now()
     quoted = book_timestamp(book, contract["slug"], received)
     if quoted is None or quoted < game["tip"]:
         return None, "No fresh Polymarket US order book"
@@ -176,15 +214,19 @@ def signal_for(game, contract, assignments):
             "clock": game["clock_text"], "away_score": game["scores"]["away"], "home_score": game["scores"]["home"],
             "probability": float(probability), "screened_ev": offer["screened_ev"], "limit": str(limit),
             "initial_ask": str(ask), "initial_depth_at_limit": str(sum(size for price, size in levels if price <= limit)),
-            "initial_book_utc": quoted.isoformat(), "score_utc": score_at.isoformat(), "signal_utc": received.isoformat(),
+            "initial_book_utc": quoted.isoformat(), "initial_book_source": source,
+            "score_utc": score_at.isoformat(), "signal_utc": received.isoformat(),
             "full_quantity": full, "half_shares_quantity": small if small >= max(1, minimum) else 0}
     return signal, None
 
 
-def delayed_execution(signal, contract):
+def delayed_execution(signal, contract, books):
+    signalled_at = utc(signal["signal_utc"])
+    execution_at = signalled_at + max(timedelta(microseconds=1), timedelta(seconds=signal["requested_delay_seconds"]))
     try:
-        book = fresh_book(signal["market"])
-        received = now()
+        book, received, source = books.read(signal["market"], execution_at=execution_at)
+        if received < execution_at:
+            return {"reason": "book_received_before_execution_target"}
         quoted = book_timestamp(book, signal["market"], received)
         if quoted is None or quoted < utc(signal["initial_book_utc"]):
             return {"reason": "stale_or_wrong_book"}
@@ -194,8 +236,9 @@ def delayed_execution(signal, contract):
         limit = decimal(signal["limit"])
         long = signal["long"]
         depth = sum(size for price, size in buy_levels(book, long) if price <= limit) if state == "MARKET_STATE_OPEN" else 0
-        result = {"delayed_book_utc": quoted.isoformat(), "observed_utc": received.isoformat(),
-                  "observed_delay_seconds": round((received - utc(signal["signal_utc"])).total_seconds(), 3),
+        result = {"delayed_book_utc": quoted.isoformat(), "delayed_book_source": source,
+                  "observed_utc": received.isoformat(),
+                  "observed_delay_seconds": round((received - signalled_at).total_seconds(), 3),
                   "delayed_depth_at_limit": str(depth), "reason": state}
         for size in SIZES:
             quantity = signal[f"{size}_quantity"]
@@ -212,11 +255,13 @@ def delayed_execution(signal, contract):
                 else:
                     result[size] = {"status": "no_fill"}
         return result
+    except BookUnavailable as exc:
+        return {"reason": str(exc)}
     except halftime.FEED_ERRORS as exc:
         return {"reason": feed_issue("Polymarket US delayed book", exc)}
 
 
-def scan(ledger, latency, *, explain=False):
+def scan(ledger, latency, *, explain=False, stream=None):
     reference = now()
     started = reference.astimezone(halftime.ET)
     day = started.date()
@@ -224,18 +269,18 @@ def scan(ledger, latency, *, explain=False):
     tips = (reference - timedelta(hours=8), reference + timedelta(hours=2))
     seen = ledger.seen()
     games, warnings = {}, []
+    books = OrderBooks(stream)
 
-    def check(game, listings):
+    def check(game, match):
         windows = [window for window in WINDOWS if (game["id"], window) not in seen
                    and (window == "anytime" or game["inside_window"])]
         if not windows:
             return 0, None
+        if match is None:
+            return 0, "No uniquely matched Polymarket US moneyline"
         try:
-            matches = [match for slug, market in listings if (match := halftime.verified_contract(game, slug, market))]
-            if len(matches) != 1:
-                return 0, "No uniquely matched Polymarket US moneyline"
-            _, contract, assignments = matches[0]
-            signal, reason = signal_for(game, contract, assignments)
+            _, contract, assignments = match
+            signal, reason = signal_for(game, contract, assignments, books)
         except halftime.FEED_ERRORS as exc:
             return 0, feed_issue("NBA pricing data", exc)
         if signal is None:
@@ -245,7 +290,7 @@ def scan(ledger, latency, *, explain=False):
         if not windows:
             return 0, None
         sleep(latency)
-        ledger.record_execution(game["id"], windows, delayed_execution(signal, contract))
+        ledger.record_execution(game["id"], windows, delayed_execution(signal, contract, books))
         return len(windows), None
 
     with ThreadPoolExecutor(max_workers=6) as pool:
@@ -269,7 +314,18 @@ def scan(ledger, latency, *, explain=False):
             listings = inventory.result()[0].get("NBA", [])
         except halftime.FEED_ERRORS as exc:
             return len(games), 0, [*warnings, feed_issue("Polymarket US NBA listings", exc)]
-        outcomes = list(pool.map(lambda game: check(game, listings), games.values()))
+        matches = []
+        for game in games.values():
+            try:
+                found = [match for slug, market in listings if (match := halftime.verified_contract(game, slug, market))]
+            except halftime.FEED_ERRORS:
+                found = []
+            matches.append(found[0] if len(found) == 1 else None)
+        if stream is not None:
+            stream.set_markets(match[1]["slug"] for match in matches if match)
+            if stream.error:
+                warnings.append(stream.error)
+        outcomes = list(pool.map(check, games.values(), matches))
     rejected = Counter(reason for _, reason in outcomes if reason)
     if rejected:
         warnings.append("Skipped · " + " · ".join(f"{count} {reason}" for reason, count in rejected.most_common()))
@@ -363,12 +419,24 @@ def main():
         parser.error("--latency-seconds must be a finite, nonnegative number")
     ledger = Ledger(args.output)
     print(f"PAPER · NBA moneyline timing and size · {ledger.output.resolve()}", flush=True)
+    stream = worker = None
+    stop = Event()
+    if not args.report:
+        try:
+            credentials = signing_credentials(*live_credentials(None))
+        except (ValueError, ImportError):
+            print("Books · paced Polymarket US REST · WebSocket credentials unavailable", flush=True)
+        else:
+            stream = BookStream(credentials, Event(), request_id="nba-moneyline-shadow")
+            worker = Thread(target=stream.follow, args=(stop,), daemon=True)
+            worker.start()
+            print("Books · Polymarket US WebSocket with limited REST fallback", flush=True)
     last_settlement = float("-inf")
     try:
         while True:
             started = monotonic()
             if not args.report:
-                games, signals, warnings = scan(ledger, args.latency_seconds, explain=args.explain)
+                games, signals, warnings = scan(ledger, args.latency_seconds, explain=args.explain, stream=stream)
                 print(f"{games} live NBA games · {signals} new signals", flush=True)
                 for warning in warnings:
                     print(warning, flush=True)
@@ -384,6 +452,10 @@ def main():
             sleep(max(1, SCAN_INTERVAL - (monotonic() - started)))
     except KeyboardInterrupt:
         return
+    finally:
+        stop.set()
+        if worker is not None:
+            worker.join(timeout=2)
 
 
 if __name__ == "__main__":

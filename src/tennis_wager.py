@@ -165,15 +165,20 @@ class BookStream:
                 stop.wait(2)
 
     def latest(self, market, *, clock, max_age, after=None):
+        snapshot = self.latest_snapshot(market, clock=clock, max_age=max_age, after=after)
+        return snapshot[0] if snapshot else None
+
+    def latest_snapshot(self, market, *, clock, max_age, after=None, received_at_or_after=None):
         with self.lock:
             snapshot = self.snapshots.get(market)
         if snapshot is None:
             return None
-        book, _ = snapshot
+        book, received = snapshot
         observed = utc(book.get("transactTime"))
         if (observed is not None and 0 <= (clock() - observed).total_seconds() <= max_age
-                and (after is None or observed > after)):
-            return book
+                and (after is None or observed > after)
+                and (received_at_or_after is None or received >= received_at_or_after)):
+            return snapshot
         return None
 
     def usable_after(self, market, score, *, diagnostic=None):
