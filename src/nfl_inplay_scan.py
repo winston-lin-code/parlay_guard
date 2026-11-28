@@ -8,7 +8,7 @@ import requests
 
 from .college_ev_scan import MAX_CATALOG_AGE, match_fixture
 from .college_sources import ET, parse_espn
-from .inplay_scan import MAX_AGE, _books, array, as_num, fee_schedule, market_probabilities, priced_side, read_json, utc
+from .inplay_scan import MAX_AGE, _books, array, as_num, fee_schedule, market_probabilities, read_json, record_pricing, utc
 from .nfl_inplay_model import forecast, load, score_clock
 from .pro_ev_scan import resolve_pro_team
 
@@ -69,9 +69,11 @@ def eligible_markets(fixture, game, state, artifact):
     return live_markets(fixture, game, projection, checks, resolve_pro_team, nfl=True)
 
 
-def scan_live(sports, sport, artifact, get_scoreboard, parse_clock, market_candidates):
+def scan_live(sports, sport, artifact, get_scoreboard, parse_clock, market_candidates, *, books_reader=None):
     started = datetime.now(timezone.utc)
     result = {"updated_utc": None, "games": [], "opportunities": [], "warnings": []}
+    if books_reader is not None:
+        result.update(quote_candidates=[], rest_books={})
     catalog = utc(sports.get("observed_utc"))
     if artifact is None or catalog is None or not timedelta(seconds=-5) <= started - catalog <= MAX_CATALOG_AGE:
         return result
@@ -100,7 +102,7 @@ def scan_live(sports, sport, artifact, get_scoreboard, parse_clock, market_candi
             if tokens:
                 batches = [tokens[i:i + 100] for i in range(0, len(tokens), 100)]
                 with ThreadPoolExecutor(max_workers=4) as pool:
-                    for batch in pool.map(_books, batches):
+                    for batch in pool.map(books_reader or _books, batches):
                         books.update(batch)
             latest = {g["espn_id"]: g for g in get_scoreboard(day, datetime.now(timezone.utc))} if candidates else {}
         except FEED_ERRORS as exc:
@@ -121,21 +123,18 @@ def scan_live(sports, sport, artifact, get_scoreboard, parse_clock, market_candi
                         priced_sides=0, modeled_markets=len(picks), live_model=True)
             for market, sides, fees in picks:
                 for token, label, probability in sides:
-                    priced = priced_side(books.get(token, {}), probability, fees, now)
-                    if not priced:
-                        continue
-                    view["priced_sides"] += 1
-                    if priced["screened_ev"] > 0:
-                        result["opportunities"].append({
-                            "event": view["event"], "matchup": view["title"], "phase": "live",
-                            "score": [away, home], "market": market["question"], "market_type": market["sportsMarketType"], "line": market.get("line"),
-                            "side": label, "token_id": token,
-                            "probability": probability, "half_payout_tie": sport == "nfl" and market["sportsMarketType"] == "moneyline", **priced,
-                        })
+                    row = {"event": view["event"], "matchup": view["title"], "phase": "live",
+                           "score": [away, home], "period_text": verified["period_text"],
+                           "market": market["question"], "market_type": market["sportsMarketType"],
+                           "line": market.get("line"), "side": label, "token_id": token, "probability": probability,
+                           "half_payout_tie": sport == "nfl" and market["sportsMarketType"] == "moneyline"}
+                    record_pricing(result, view, row, fees, books, now)
             result["games"].append(view)
             result["updated_utc"] = now.isoformat()
+        if books_reader is not None:
+            result["rest_books"].update(books)
     return result
 
 
-def scan_nfl(sports):
-    return scan_live(sports, "nfl", load(), scoreboard, score_clock, eligible_markets)
+def scan_nfl(sports, *, books_reader=None):
+    return scan_live(sports, "nfl", load(), scoreboard, score_clock, eligible_markets, books_reader=books_reader)

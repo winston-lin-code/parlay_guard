@@ -252,6 +252,10 @@ details > summary { color: var(--muted); font-size: .84rem; }
             </dl></details>
           </div>
           <details class="alternatives" id="alternatives" hidden><summary id="alternative-count"></summary><ul class="alt-list" id="alt-list"></ul></details>
+          <div id="recent-picks" hidden>
+            <h3>Recent picks</h3>
+            <ul class="alt-list" id="recent-pick-list"></ul>
+          </div>
         </div>
       </div>
     </section>
@@ -291,6 +295,7 @@ details > summary { color: var(--muted); font-size: .84rem; }
 <script>
 const $ = id => document.getElementById(id);
 const WINDOW_MS = 35000;
+const RECENT_PICK_MS = 120000;
 const clockTime = new Intl.DateTimeFormat(undefined, {hour:'numeric', minute:'2-digit', second:'2-digit'});
 const tipTime = new Intl.DateTimeFormat(undefined, {weekday:'short', hour:'numeric', minute:'2-digit', timeZoneName:'short'});
 const age = (value, now) => now - Date.parse(value);
@@ -310,6 +315,7 @@ let listFingerprint = '';
 let leaguesFingerprint = '';
 let quotesFingerprint = '';
 let alternativesFingerprint = '';
+let recentFingerprint = '';
 let warningsFingerprint = '';
 let halftimeFingerprint = '';
 let halftimeCoverageFingerprint = '';
@@ -318,6 +324,10 @@ let wcbbFingerprint = '';
 let cs2Fingerprint = '';
 let loading = false;
 let offline = false;
+let socket = null;
+let socketUpdated = 0;
+let reconnectDelay = 1000;
+let snapshotReceivedAt = 0;
 const previousPrices = new Map();
 
 function text(id, value) {
@@ -489,6 +499,27 @@ function setWagerLink(link, event, token, side, market) {
   link.setAttribute('aria-label', 'Open on Polymarket US: ' + side + ' · ' + market);
 }
 
+function renderRecentPicks(game, now) {
+  const recent = [...(snapshot.recent_picks?.[game.event] || [])];
+  const lastTop = snapshot.top_picks?.[game.event];
+  if (!game.entries.some(row => row.token_id === lastTop)) {
+    const last = snapshot.opportunities?.find(row => row.event === game.event && row.token_id === lastTop);
+    if (last) recent.unshift({...last, last_seen_utc: new Date(snapshotReceivedAt).toISOString()});
+  }
+  const visible = recent.filter(row => age(row.last_seen_utc, now) <= RECENT_PICK_MS);
+  $('recent-picks').hidden = visible.length === 0;
+  const key = JSON.stringify(visible);
+  if (key === recentFingerprint) return;
+  recentFingerprint = key;
+  $('recent-pick-list').replaceChildren(...visible.map(row => {
+    const item = element('li', '');
+    item.append(element('strong', row.side + ' · ' + row.market),
+      element('small', 'Expired · ' + price(row.ask) + ' ask · ' + edge(row.screened_ev) + ' screened EV · '
+        + clockTime.format(new Date(row.quote_utc)), 'muted'));
+    return item;
+  }));
+}
+
 function renderDetail(game, now) {
   $('selected').hidden = !game;
   $('no-selection').hidden = Boolean(game);
@@ -508,12 +539,15 @@ function renderDetail(game, now) {
   $('market-link').hidden = !validSlug.test(slug);
   if (!$('market-link').hidden) $('market-link').href = 'https://polymarket.com/event/' + slug;
   renderOdds(game, now);
+  renderRecentPicks(game, now);
 
   const pick = topPick(game);
   $('pick').hidden = !pick;
   $('no-pick').hidden = Boolean(pick);
   text('no-pick', pick ? '' : noPickMessage(game));
-  text('pick-age', pick ? seconds(pick.quote_utc, now) : '');
+  const quoteSource = pick?.book_source === 'websocket' ? 'Streamed book'
+    : pick?.book_source === 'rest' ? 'REST book' : '';
+  text('pick-age', pick ? [quoteSource, seconds(pick.quote_utc, now)].filter(Boolean).join(' · ') : '');
   if (pick) {
     $('pick-actions').hidden = !pick.market_type;
     $('place-pick').dataset.wager = pick.token_id;
@@ -929,7 +963,9 @@ function render() {
   const live = !offline && timestamps.some(value => fresh(value, now));
   $('feed').dataset.live = String(live);
   const updated = Math.max(...timestamps.filter(value => fresh(value, now)).map(Date.parse));
-  text('feed', offline ? 'Connection interrupted' : live ? 'Updated ' + clockTime.format(new Date(updated)) : 'Waiting for fresh data');
+  const streaming = socket?.readyState === WebSocket.OPEN && socketUpdated > 0;
+  const connection = streaming ? 'WebSocket · ' : 'Polling · ';
+  text('feed', offline ? 'Connection interrupted' : live ? connection + clockTime.format(new Date(updated)) : connection + 'waiting for fresh data');
   const wcbb = phase === 'wcbb';
   const cs2 = phase === 'cs2';
   $('sport').hidden = wcbb || cs2;
@@ -987,14 +1023,56 @@ async function refresh() {
   try {
     const response = await fetch('/api/inplay/opportunities', {cache:'no-store', signal:AbortSignal.timeout(8000)});
     if (!response.ok) throw new Error(response.status);
-    snapshot = await response.json();
-    offline = false;
+    const data = await response.json();
+    if (socketUpdated === 0) receiveSnapshot(data);
   } catch {
-    offline = true;
+    if (socketUpdated === 0) offline = true;
   } finally {
     loading = false;
     render();
   }
+}
+
+function receiveSnapshot(data) {
+  snapshot = data;
+  snapshotReceivedAt = Date.now();
+  offline = false;
+  render();
+}
+
+function connectFeed() {
+  const url = new URL('/ws/inplay', window.location.href);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  const connection = new WebSocket(url);
+  socket = connection;
+  let watchdog = setTimeout(() => connection.close(), 12000);
+  connection.onmessage = event => {
+    if (connection !== socket) return;
+    let data;
+    try {
+      data = JSON.parse(event.data);
+    } catch {
+      connection.close();
+      return;
+    }
+    clearTimeout(watchdog);
+    watchdog = setTimeout(() => connection.close(), 12000);
+    socketUpdated = Date.now();
+    reconnectDelay = 1000;
+    receiveSnapshot(data);
+  };
+  connection.onerror = () => connection.close();
+  connection.onclose = () => {
+    clearTimeout(watchdog);
+    if (connection !== socket) return;
+    socket = null;
+    socketUpdated = 0;
+    offline = true;
+    render();
+    void refresh();
+    setTimeout(connectFeed, reconnectDelay);
+    reconnectDelay = Math.min(15000, reconnectDelay * 2);
+  };
 }
 
 const ORDER_API = '/api/inplay/us-wager/';
@@ -1164,8 +1242,8 @@ for (const tab of $('phases').querySelectorAll('button')) {
   tab.setAttribute('aria-pressed', String(tab.dataset.phase === phase));
 }
 refresh();
-setInterval(refresh, 5000);
-setInterval(() => { if (phase === 'cs2') refresh(); }, 2000);
+connectFeed();
+setInterval(() => { if (!socketUpdated) refresh(); }, 5000);
 setInterval(render, 1000);
 </script>
 </body>

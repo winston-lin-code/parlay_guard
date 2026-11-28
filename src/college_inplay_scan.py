@@ -44,6 +44,6 @@ def candidates(fixture, game, state, artifact):
     return live_markets(fixture, game, projection, checks, outcome_team, line_bounds=bounds)
 
 
-def scan_college_live(sports, sport):
+def scan_college_live(sports, sport, *, books_reader=None):
     return scan_live(sports, sport, load(sport), partial(scoreboard, sport),
-                     lambda game: score_clock(game, sport), candidates)
+                     lambda game: score_clock(game, sport), candidates, books_reader=books_reader)

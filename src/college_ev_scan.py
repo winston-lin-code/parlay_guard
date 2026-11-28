@@ -11,7 +11,7 @@ from . import pro_score_calibration
 from .pro_ev_scan import fetch_pro_scoreboard, resolve_pro_team
 from .college_score_calibration import load_score_artifact, predict_game
 from .college_sources import ET, fetch_scoreboard, outcome_team
-from .inplay_scan import MAX_AGE, _books, array, fee_schedule, market_probabilities, priced_side, utc
+from .inplay_scan import MAX_AGE, _books, array, fee_schedule, market_probabilities, record_pricing, utc
 
 MAX_MODEL_AGE = timedelta(days=14)
 MAX_CATALOG_AGE = timedelta(minutes=3)
@@ -84,11 +84,13 @@ def candidates_for_fixture(fixture, game, model):
     return result
 
 
-def scan_college(sports):
+def scan_college(sports, *, books_reader=None):
     now = datetime.now(timezone.utc)
     observed = utc(sports.get("observed_utc"))
     warnings = []
     result = {"updated_utc": None, "games": [], "opportunities": [], "warnings": warnings}
+    if books_reader is not None:
+        result.update(quote_candidates=[], rest_books={})
     if observed is None or not timedelta(seconds=-5) <= now - observed <= MAX_CATALOG_AGE:
         return result
     matches = {}
@@ -122,7 +124,7 @@ def scan_college(sports):
 
     def quotes(batch):
         try:
-            return _books(batch)
+            return (books_reader or _books)(batch)
         except (OSError, ValueError, KeyError, TypeError):
             warnings.append("Pregame order books unavailable")
             return {}
@@ -156,17 +158,12 @@ def scan_college(sports):
         if utc(game["start_utc"]) <= observed_now + timedelta(minutes=5):
             continue
         for token, label, probability in sides:
-            priced = priced_side(books.get(token, {}), probability, fees, observed_now)
-            if priced is None:
-                continue
-            state["priced_sides"] += 1
-            if priced["screened_ev"] > 0:
-                result["opportunities"].append({
-                    "event": state["event"], "matchup": state["title"], "phase": "pregame",
-                    "market": market["question"], "market_type": market["sportsMarketType"], "line": market.get("line"),
-                    "side": label, "token_id": token,
-                    "probability": probability, **priced,
-                    "half_payout_tie": state.get("pro") == "nfl" and market["sportsMarketType"] == "moneyline",
-                })
+            row = {"event": state["event"], "matchup": state["title"], "phase": "pregame",
+                   "market": market["question"], "market_type": market["sportsMarketType"], "line": market.get("line"),
+                   "side": label, "token_id": token, "probability": probability,
+                   "half_payout_tie": state.get("pro") == "nfl" and market["sportsMarketType"] == "moneyline"}
+            record_pricing(result, state, row, fees, books, observed_now)
+    if books_reader is not None:
+        result["rest_books"] = books
     result["warnings"] = sorted(set(warnings))
     return result

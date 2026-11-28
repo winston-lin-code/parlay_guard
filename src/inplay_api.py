@@ -1,5 +1,7 @@
 """Independent live scanner so slow pregame model refreshes don't block quotes."""
 
+import asyncio
+import json
 import os
 import re
 import sqlite3
@@ -10,16 +12,17 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 
-from .inplay_scan import MAX_AGE, SCORING_MARKETS, scan_catalog, scan_opportunities, utc
+from .clob_book_stream import ClobBookStream
+from .inplay_scan import MAX_AGE, SCORING_MARKETS, _books, as_num, priced_side, scan_catalog, scan_opportunities, utc
 
 from .sports_inventory import scan_sports_events
 from .college_ev_scan import scan_college
 from .nfl_inplay_scan import scan_nfl
 from .college_inplay_scan import scan_college_live
-from .game_board_feed import FINAL_SCORE_AGE, MAX_SCORE_AGE, follow_scores, scan_moneylines
+from .game_board_feed import FINAL_SCORE_AGE, MAX_SCORE_AGE, best_ask, follow_scores, moneyline_fixtures, scan_moneylines
 from .halftime_paper import LEAGUES as HALFTIME_LEAGUES, screen_halftime
 from .tennis_live import ITF_LEAGUES, observe_first_set_break, tennis_projection
 from .tennis_wager import SCORE_MAX_AGE as ITF_SCORE_MAX_AGE, fresh as fresh_itf_score
@@ -30,6 +33,9 @@ from .pro_halftime_orders import LIVE_STAKE
 router = APIRouter()
 ROOT = Path(__file__).resolve().parents[1]
 PAGE = ROOT / "static" / "inplay.html"
+RECENT_PICK_SECONDS = 120
+MODEL_REFRESH_SECONDS = 8
+SCORE_SOURCES = {"nba": "nba", "nfl": "nfl", "cbb": "mbb", "cfb": "cfb"}
 
 
 def pro_snapshot_for_display(snapshot, now):
@@ -82,6 +88,12 @@ def agrees_with_board(row, score, model_at):
     latest = utc(score.get("score_utc"))
     if latest is None or model_at is None or latest < model_at:
         return True
+    # Only compare period labels when both feeds use the same explicit format.
+    model_period, score_period = (str(value or "").upper().replace(" ", "")
+                                  for value in (row.get("period_text"), score.get("period_text")))
+    if (re.fullmatch(r"[QH]\d+", model_period) and re.fullmatch(r"[QH]\d+", score_period)
+            and model_period[0] == score_period[0] and model_period != score_period):
+        return False
     home_away = re.fullmatch(r"(\d+)\s*[-–]\s*(\d+)", score.get("score_text", ""))
     return home_away is None or row.get("score") == [int(home_away[2]), int(home_away[1])]
 
@@ -91,6 +103,10 @@ class ScanState:
         self.lock = threading.Lock()
         self.stop = threading.Event()
         self.workers = []
+        self.market_books = ClobBookStream()
+        self.revision = 0
+        self.score_wake = {source: threading.Event() for source in SCORE_SOURCES.values()}
+        self.recent_picks = {}
         self.snapshot = {"updated_utc": None, "coverage": {}, "opportunities": [], "warnings": []}
         self.catalog = {"cataloged": 0, "open_order_books": 0, "status": "waiting"}
         self.sports = {"status": "waiting", "games": []}
@@ -116,6 +132,7 @@ class ScanState:
         tasks = ((self.live_loop,), (self.catalog_loop,), (self.sports_loop,), (self.college_loop,),
                  (self.board_loop,), (self.score_loop,), (self.halftime_loop,), (self.pro_halftime_loop,),
                  (self.wcbb_loop,), (self.wcbb_settlement_loop,), (self.cs2_loop,),
+                 (self.market_books.follow, self.stop, self.wanted_tokens),
                  (self.league_live_loop, "nfl", scan_nfl),
                  (self.league_live_loop, "mbb", scan_college_live, "mbb"),
                  (self.league_live_loop, "cfb", scan_college_live, "cfb"))
@@ -130,6 +147,8 @@ class ScanState:
 
     def shutdown(self):
         self.stop.set()
+        for wake in self.score_wake.values():
+            wake.set()
         for worker in self.workers:
             worker.join(timeout=1)
         self.workers.clear()
@@ -137,14 +156,42 @@ class ScanState:
     def live_loop(self):
         while not self.stop.is_set():
             start = time.monotonic()
+            self.score_wake["nba"].clear()
             try:
-                snapshot = scan_opportunities()
+                snapshot = scan_opportunities(books_reader=self.rest_books)
             except Exception as exc:
                 snapshot = {"updated_utc": None, "coverage": {}, "opportunities": [],
                             "warnings": [f"Live scan unavailable: {type(exc).__name__}"]}
             with self.lock:
                 self.snapshot = snapshot
-            self.stop.wait(max(4, 20 - (time.monotonic() - start)))
+                self.revision += 1
+            self.wait_for_scores("nba", start)
+
+    def wait_for_scores(self, league, started):
+        self.score_wake[league].wait(max(1, MODEL_REFRESH_SECONDS - (time.monotonic() - started)))
+        self.stop.wait(max(0, 3 - (time.monotonic() - started)))
+
+    def wanted_tokens(self):
+        with self.lock:
+            sources = self.snapshot, self.college, *self.live_sports.values()
+            fixtures = self.sports.get("games", [])
+        now = datetime.now(timezone.utc)
+        return ({row["token_id"] for source in sources for row, _ in source.get("quote_candidates", [])}
+                | {token for fixture in moneyline_fixtures(fixtures, now) for _, token in fixture["moneyline"]})
+
+    def rest_books(self, tokens):
+        streamed = self.market_books.snapshot(tokens)
+        now = datetime.now(timezone.utc).timestamp()
+        missing = []
+        for token in tokens:
+            live = streamed.get(token, {})
+            stamp = as_num(live.get("timestamp"))
+            if not live.get("closed") and (stamp is None or not -5 <= now - stamp / 1000 <= MAX_AGE
+                                          or live.get("min_order_size") is None):
+                missing.append(token)
+        books = _books(missing) if missing else {}
+        self.market_books.observe_market_terms(books)
+        return books
 
     def halftime_loop(self):
         while not self.stop.is_set():
@@ -284,9 +331,10 @@ class ScanState:
             started = time.monotonic()
             with self.lock:
                 games = self.sports.get("games", [])
-            result = scan_moneylines(games)
+            result = scan_moneylines(games, books_reader=self.rest_books)
             with self.lock:
                 self.moneyline_quotes = result
+                self.revision += 1
                 now = datetime.now(timezone.utc)
                 self.scores = {key: row for key, row in self.scores.items()
                                if now - utc(row["score_utc"]) <= FINAL_SCORE_AGE}
@@ -298,9 +346,29 @@ class ScanState:
             if previous.get("phase") != "final":
                 first_set_break = observe_first_set_break(previous, update, utc)
                 self.scores[game_id] = {**update, "first_set_break_utc": first_set_break} if first_set_break else update
+                self.revision += 1
+                if any(previous.get(key) != update.get(key) for key in ("phase", "score_text", "period_text")):
+                    league = update.get("event_slug", "").split("-")[0] or update.get("score_league", "").lower()
+                    if league in SCORE_SOURCES:
+                        self.score_wake[SCORE_SOURCES[league]].set()
 
     def score_loop(self):
         follow_scores(self.stop, self.update_score)
+
+    def remember_picks(self, ranked, picks, now):
+        current = {(row["event"], row["token_id"]): row for row in ranked}
+        with self.lock:
+            self.recent_picks = {key: row for key, row in self.recent_picks.items()
+                                 if (now - utc(row["last_seen_utc"])).total_seconds() <= RECENT_PICK_SECONDS}
+            for event, token in picks.items():
+                key = event, token
+                self.recent_picks[key] = {**current[key], "last_seen_utc": now.isoformat()}
+            recent = {}
+            for key, row in sorted(self.recent_picks.items(), key=lambda item: item[1]["last_seen_utc"], reverse=True):
+                rows = recent.setdefault(key[0], [])
+                if key not in current and len(rows) < 3:
+                    rows.append(row)
+            return {event: rows for event, rows in recent.items() if rows}
 
     def read(self):
         with self.lock:
@@ -315,13 +383,36 @@ class ScanState:
         now = datetime.now(timezone.utc)
         fresh, games, observations = [], [], []
         sources = (snapshot, college, *live_sports)
+        fixtures = moneyline_fixtures(sports.get("games", []), now)
+        moneylines = {game["event"]: game["moneyline"] for game in fixtures}
+        streamed = self.market_books.snapshot(
+            {row["token_id"] for source in sources for row, _ in source.get("quote_candidates", [])}
+            | {token for sides in moneylines.values() for _, token in sides})
         for source in sources:
             observed = utc(source.get("updated_utc"))
             if observed is None or not -5 <= (now - observed).total_seconds() <= MAX_AGE:
                 continue
             observations.append(observed)
-            games.extend({**game, "state_observed_utc": observed.isoformat()} for game in source.get("games", []))
+            views = {game["event"]: {**game, "state_observed_utc": observed.isoformat()}
+                     for game in source.get("games", [])}
+            games.extend(views.values())
             fresh.extend(source["opportunities"])
+            for row, fees in source.get("quote_candidates", []):
+                token = row["token_id"]
+                live = streamed.get(token, {})
+                rest = source["rest_books"].get(token, {})
+                if live.get("closed"):
+                    continue
+                if (live.get("min_order_size") is not None
+                        and (as_num(live.get("timestamp")) or 0) >= (as_num(rest.get("timestamp")) or 0)):
+                    book, book_source = live, "websocket"
+                else:
+                    book, book_source = rest, "rest"
+                priced = priced_side(book, row["probability"], fees, now)
+                if priced is not None:
+                    views[row["event"]]["priced_sides"] += 1
+                    if priced["screened_ev"] > 0:
+                        fresh.append({**row, **priced, "book_source": book_source})
         board = []
         score_states = {}
         catalog_at = utc(sports.get("observed_utc"))
@@ -336,15 +427,27 @@ class ScanState:
                 if now - utc(score["score_utc"]) <= max_age:
                     state = score
                     score_states[event] = state
-            prices = [] if state.get("phase") == "final" else [
-                row for row in quotes.get(event, []) if -5 <= (now - utc(row["quote_utc"])).total_seconds() <= MAX_AGE
-            ]
+            prices = {}
+            if state.get("phase") != "final":
+                prices = {row["token_id"]: row for row in quotes.get(event, [])
+                          if -5 <= (now - utc(row["quote_utc"])).total_seconds() <= MAX_AGE}
+                for side, token in moneylines.get(event, []):
+                    if token not in streamed:
+                        continue
+                    book = streamed[token]
+                    old = prices.get(token)
+                    stamp = as_num(book.get("timestamp"))
+                    if not book.get("closed") and old and stamp is not None and stamp / 1000 < utc(old["quote_utc"]).timestamp():
+                        continue
+                    prices.pop(token, None)
+                    if quote := best_ask(book, now):
+                        prices[token] = {"side": side, "token_id": token, **quote}
             current_score = state or (game if catalog_is_fresh else {})
             tennis = tennis_projection(game, current_score, now)
             if tennis:
                 tennis_states[game.get("slug") or event] = (current_score, tennis)
             if state or prices or tennis:
-                board.append({"event": event, "moneyline_quotes": prices, "tennis_projection": tennis, **state})
+                board.append({"event": event, "moneyline_quotes": list(prices.values()), "tennis_projection": tennis, **state})
         if isinstance(halftime.get("live_games"), list):
             live_games = []
             for game in halftime["live_games"]:
@@ -362,6 +465,7 @@ class ScanState:
         fresh = [row for row in fresh if agrees_with_board(
             row, score_states.get(row["event"], {}), times.get(row["event"]))]
         ranked, picks = rank_opportunities(fresh, games, now)
+        recent = self.remember_picks(ranked, picks, now)
         sports["games"] = [{k: v for k, v in game.items() if k not in ("college_markets", "moneyline", "sports_game_id")}
                            for game in sports.get("games", [])]
         coverage = dict(snapshot.get("coverage", {}))
@@ -371,9 +475,10 @@ class ScanState:
                              if -5 <= (now - utc(pick["quote_utc"])).total_seconds() <= BOOK_MAX_AGE]
         if any(wcbb_errors):
             wcbb["warnings"] = [*wcbb["warnings"], *(error for error in wcbb_errors if error)]
-        return {**snapshot, "catalog": catalog, "sports": sports, "stale": not observations,
+        public = {key: value for key, value in snapshot.items() if key not in ("quote_candidates", "rest_books")}
+        return {**public, "catalog": catalog, "sports": sports, "stale": not observations,
                 "updated_utc": max(observations).isoformat() if observations else snapshot.get("updated_utc"),
-                "coverage": coverage, "games": games, "opportunities": ranked, "top_picks": picks,
+                "coverage": coverage, "games": games, "opportunities": ranked, "top_picks": picks, "recent_picks": recent,
                 "board": board, "halftime_paper": halftime, "pro_halftime": pro_snapshot_for_display(pro_halftime, now),
                 "wcbb_anytime": wcbb, "cs2": cs2_live_ev.read_for_display(cs2, now),
                 "warnings": sorted({warning for source in sources for warning in source.get("warnings", [])}),
@@ -382,16 +487,18 @@ class ScanState:
     def league_live_loop(self, league, scanner, *args):
         while not self.stop.is_set():
             started = time.monotonic()
+            self.score_wake[league].clear()
             with self.lock:
                 fixtures = self.sports
             try:
-                snapshot = scanner(fixtures, *args)
+                snapshot = scanner(fixtures, *args, books_reader=self.rest_books)
             except Exception as exc:
                 snapshot = {"updated_utc": None, "games": [], "opportunities": [],
                             "warnings": [f"{league.upper()} live scan unavailable: {type(exc).__name__}"]}
             with self.lock:
                 self.live_sports[league] = snapshot
-            self.stop.wait(max(4, 15 - (time.monotonic() - started)))
+                self.revision += 1
+            self.wait_for_scores(league, started)
 
     def college_loop(self):
         while not self.stop.is_set():
@@ -399,12 +506,13 @@ class ScanState:
             with self.lock:
                 fixtures = self.sports
             try:
-                snapshot = scan_college(fixtures)
+                snapshot = scan_college(fixtures, books_reader=self.rest_books)
             except Exception as exc:
                 snapshot = {"updated_utc": None, "games": [], "opportunities": [],
                             "warnings": [f"Pregame scan unavailable: {type(exc).__name__}"]}
             with self.lock:
                 self.college = snapshot
+                self.revision += 1
             self.stop.wait(max(4, 20 - (time.monotonic() - started)))
 
 
@@ -419,3 +527,32 @@ def scanner_page():
 @router.get("/api/inplay/opportunities")
 def scanner_data():
     return JSONResponse(scanner.read(), headers={"Cache-Control": "no-store"})
+
+
+@router.websocket("/ws/inplay")
+async def scanner_socket(socket: WebSocket):
+    origin, host = socket.headers.get("origin"), socket.headers.get("host")
+    if origin and origin not in (f"http://{host}", f"https://{host}"):
+        await socket.close(code=1008)
+        return
+    await socket.accept()
+    revision, payload = None, None
+    checked = sent = float("-inf")
+    try:
+        while not scanner.stop.is_set():
+            now = time.monotonic()
+            current = scanner.revision, scanner.market_books.revision
+            if current != revision or now - checked >= 1:
+                frame = json.dumps(await asyncio.to_thread(scanner.read), separators=(",", ":"), allow_nan=False)
+                revision, checked = current, now
+                if frame != payload or now - sent >= 5:
+                    await socket.send_text(frame)
+                    payload, sent = frame, now
+            try:
+                async with asyncio.timeout(0.25):
+                    if (await socket.receive())["type"] == "websocket.disconnect":
+                        return
+            except TimeoutError:
+                continue
+    except (WebSocketDisconnect, OSError):
+        return

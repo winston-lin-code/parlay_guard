@@ -233,6 +233,17 @@ def priced_side(book, probability, fees, now):
             "quote_utc": datetime.fromtimestamp(timestamp / 1000, timezone.utc).isoformat()}
 
 
+def record_pricing(snapshot, game, row, fees, books, now):
+    if "quote_candidates" in snapshot:
+        snapshot["quote_candidates"].append((row, fees))
+        return
+    priced = priced_side(books.get(row["token_id"], {}), row["probability"], fees, now)
+    if priced is not None:
+        game["priced_sides"] += 1
+        if priced["screened_ev"] > 0:
+            snapshot["opportunities"].append({**row, **priced})
+
+
 def scan_catalog(stop, progress):
     """Walk the entire active catalog, without requesting unsupported order books."""
     cursor = None
@@ -292,7 +303,7 @@ def _books(tokens):
     return {str(book.get("asset_id")): book for book in data}
 
 
-def scan_opportunities():
+def scan_opportunities(*, books_reader=None):
     started = datetime.now(timezone.utc)
     day = started.astimezone(ET).date()
     warnings = []
@@ -300,6 +311,9 @@ def scan_opportunities():
     if calibration is None:
         warnings.append("In-play calibration is unavailable")
     coverage = {"games": 0, "live_games": 0, "open_markets": 0, "modeled_markets": 0, "priced_sides": 0}
+    result = {"opportunities": []}
+    if books_reader is not None:
+        result["quote_candidates"] = []
 
     def fetch(label, function, arg, default):
         try:
@@ -353,13 +367,12 @@ def scan_opportunities():
         tokens = list(dict.fromkeys(token for _, _, sides, _ in candidates for token, _, _ in sides))
         batches = [tokens[i:i + 100] for i in range(0, len(tokens), 100)]
         books = {}
-        for batch in pool.map(lambda ids: fetch("CLOB quotes", _books, ids, {}), batches):
+        for batch in pool.map(lambda ids: fetch("CLOB quotes", books_reader or _books, ids, {}), batches):
             books.update(batch)
         live_days = sorted({g["day"] for g, _, _, _ in candidates if g["phase"] == "in"})
         confirmations = pool.map(lambda d: fetch(f"ESPN verification {d}", scoreboard, d, []), live_days)
         latest = parse_games([event for events in confirmations for event in events], datetime.now(timezone.utc))
     now = datetime.now(timezone.utc)
-    opportunities = []
     for original, market, sides, fees in candidates:
         game = original
         if original["phase"] == "in":
@@ -375,26 +388,24 @@ def scan_opportunities():
             warnings.append("Scan exceeded the quote and game-state freshness window")
             break
         for token, label, probability in sides:
-            priced = priced_side(books.get(token, {}), probability, fees, now)
-            if priced is None:
-                continue
-            coverage["priced_sides"] += 1
-            scan_games[game["slug"]]["priced_sides"] += 1
-            if priced["screened_ev"] <= 0:
-                continue
-            opportunities.append({
+            row = {
                 "event": game["slug"], "matchup": f"{game['away']} @ {game['home']}",
                 "phase": "live" if game["phase"] == "in" else "pregame",
                 "period": game["period"], "clock": game["clock"],
+                "period_text": scan_games[game["slug"]]["period_text"],
                 "score": [game["away_score"], game["home_score"]] if game["phase"] == "in" else None,
                 "market": market["question"], "market_type": market["sportsMarketType"], "line": market.get("line"),
                 "side": label, "token_id": token,
-                "probability": probability, **priced,
-            })
+                "probability": probability,
+            }
+            record_pricing(result, scan_games[game["slug"]], row, fees, books, now)
     calibration_summary = {key: calibration[key] for key in (
         "version", "calibration_season", "holdout_season", "holdout_games", "market_lines", "holdout",
     )} if calibration else None
-    return {"updated_utc": now.isoformat(), "coverage": coverage, "calibration": calibration_summary,
+    coverage["priced_sides"] = sum(game["priced_sides"] for game in scan_games.values())
+    result["opportunities"].sort(key=lambda row: -row["screened_ev"])
+    if books_reader is not None:
+        result["rest_books"] = books
+    return {**result, "updated_utc": now.isoformat(), "coverage": coverage, "calibration": calibration_summary,
             "games": list(scan_games.values()),
-            "opportunities": sorted(opportunities, key=lambda row: -row["screened_ev"]),
             "warnings": sorted(set(warnings))}

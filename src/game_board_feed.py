@@ -76,18 +76,21 @@ def best_ask(book, now):
         return {"ask": min(asks), "quote_utc": datetime.fromtimestamp(timestamp / 1000, timezone.utc).isoformat()}
 
 
-def scan_moneylines(fixtures):
-    now = datetime.now(timezone.utc)
+def moneyline_fixtures(fixtures, now):
     upcoming = []
     for fixture in fixtures:
         tip = utc(fixture.get("start_utc"))
         if fixture.get("moneyline") and tip is not None and now - timedelta(hours=8) <= tip <= now + timedelta(hours=36):
             upcoming.append((tip, fixture))
     upcoming.sort(key=lambda item: (item[1].get("phase") != "live", abs(item[0] - now)))
-    selected = [fixture for _, fixture in upcoming[:MAX_FIXTURES]]
+    return [fixture for _, fixture in upcoming[:MAX_FIXTURES]]
+
+
+def scan_moneylines(fixtures, *, books_reader=None):
+    selected = moneyline_fixtures(fixtures, datetime.now(timezone.utc))
     tokens = list(dict.fromkeys(token for fixture in selected for _, token in fixture["moneyline"]))
     try:
-        books = _books(tokens) if tokens else {}
+        books = (books_reader or _books)(tokens) if tokens else {}
     except (requests.RequestException, OSError, ValueError, KeyError, TypeError):
         return {}
     now = datetime.now(timezone.utc)
